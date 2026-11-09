@@ -37,10 +37,12 @@
 
   // ── Localiza el bloque o tarjeta del recruiter en el DOM ───────────────────
   function findRecruiterContainer() {
-    // Método 1: Por el enlace especial de mensaje al hiring team
-    const hiringMsgLink = document.querySelector('a[href*="JOB_DETAILS_HIRING_TEAM"], a[href*="screenContext=JOB_DETAILS_HIRING_TEAM"]');
+    // ── PRIORIDAD 1: Por enlace de mensaje directo al hiring team ─────────────
+    // Este href sólo aparece cuando LinkedIn muestra un recruiter individual real.
+    const hiringMsgLink = document.querySelector(
+      'a[href*="JOB_DETAILS_HIRING_TEAM"], a[href*="screenContext=JOB_DETAILS_HIRING_TEAM"]'
+    );
     if (hiringMsgLink) {
-      // Subir al ancestro común que contiene tanto el mensaje como el perfil
       let el = hiringMsgLink;
       for (let i = 0; i < 7; i++) {
         if (!el.parentElement) break;
@@ -51,27 +53,27 @@
       }
     }
 
-    // Método 2: Por palabras clave en títulos o encabezados (español e inglés)
-    const keywords = [
+    // ── PRIORIDAD 2: Texto exacto "Conoce al equipo de contratación" / "Meet the hiring team" ──
+    // Son las únicas frases que marcan inequívocamente la presencia de un recruiter
+    // individual de la oferta. Se excluye deliberadamente "Personas con las que puedes
+    // hablar" / "People you can reach out to" como punto de entrada porque esa sección
+    // engloba también conexiones de red y alumni que NO son recruiters de la oferta.
+    const strictKeywords = [
       'conoce al equipo de contratación',
-      'personas con las que puedes hablar',
-      'anunciante del empleo',
       'meet the hiring team',
-      'people you can reach out to',
-      'job poster'
     ];
 
-    const allElements = document.querySelectorAll('h2, h3, p, span, div');
+    const allElements = document.querySelectorAll('h2, h3, h4, p, span, div');
     for (const el of allElements) {
-      if (el.children.length > 2) continue; // Evitar contenedores gigantescos
+      if (el.children.length > 3) continue; // Evitar contenedores gigantescos
       const text = el.textContent.trim().toLowerCase();
       if (!text) continue;
 
-      const matchesKeyword = keywords.some(kw => text.includes(kw));
-      if (matchesKeyword) {
-        // Encontrar el contenedor cercano que tenga el enlace al perfil (/in/)
+      const matchesStrict = strictKeywords.some(kw => text === kw || text.startsWith(kw));
+      if (matchesStrict) {
+        // Subir hasta encontrar el contenedor que contiene el perfil individual (/in/)
         let container = el;
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 8; i++) {
           if (!container.parentElement) break;
           container = container.parentElement;
           if (container.querySelector('a[href*="/in/"]')) {
@@ -81,17 +83,84 @@
       }
     }
 
-    // Método 3: Selectores clásicos de LinkedIn
+    // ── PRIORIDAD 3: Texto "Anunciante del empleo" / "Job poster" ─────────────
+    // Este texto siempre aparece junto al perfil del recruiter real de la oferta.
+    const jobPosterKeywords = ['anunciante del empleo', 'job poster'];
+
+    for (const el of allElements) {
+      if (el.children.length > 2) continue;
+      const text = el.textContent.trim().toLowerCase();
+      if (!text) continue;
+
+      const matchesPoster = jobPosterKeywords.some(kw => text === kw || text.includes(kw));
+      if (matchesPoster) {
+        let container = el;
+        for (let i = 0; i < 8; i++) {
+          if (!container.parentElement) break;
+          container = container.parentElement;
+          if (container.querySelector('a[href*="/in/"]')) {
+            // Verificación extra: que este contenedor sea de un hiring team real,
+            // no de una sección genérica de sugerencias de red.
+            if (!isNetworkSuggestionSection(container)) {
+              return container;
+            }
+          }
+        }
+      }
+    }
+
+    // ── PRIORIDAD 4: Selectores de clase clásicos de LinkedIn ─────────────────
     const classicSection = document.querySelector(
       '[data-test-id="job-insight-hiring-team-card"], ' +
-      '.hirer-card__hirer-information, ' +
-      '.job-details-people-who-viewed__content'
+      '.hirer-card__hirer-information'
     );
     if (classicSection && classicSection.querySelector('a[href*="/in/"]')) {
       return classicSection;
     }
 
     return null;
+  }
+
+  // ── Detecta si un contenedor es una sección de sugerencias de red (falso positivo) ──
+  // Estas secciones muestran alumni o conexiones, NO recruiters de la oferta.
+  function isNetworkSuggestionSection(container) {
+    const text = container.textContent.toLowerCase();
+
+    // Señales de que es una sección de red/alumni, no de recruiter real:
+    const networkSignals = [
+      'miembros de tu red',         // "Alar y otros miembros de tu red"
+      'members of your network',
+      'antiguos alumnos',           // "Antiguos alumnos de..."
+      'alumni',
+      'mostrar todo',               // Botón "Mostrar todo" sin recruiter individual
+      'show all',
+      'y otros',                    // "Alar y otros miembros..."
+      'and others',
+    ];
+
+    // Si el texto contiene señales de red, es falso positivo
+    if (networkSignals.some(signal => text.includes(signal))) {
+      // Excepción: si también contiene señales de recruiter, puede ser legítimo
+      const recruiterSignals = [
+        'anunciante del empleo', 'job poster',
+        'conoce al equipo', 'meet the hiring team',
+        'job_details_hiring_team'
+      ];
+      const hasRecruiterSignal = recruiterSignals.some(sig => text.includes(sig));
+      if (!hasRecruiterSignal) return true; // Es una sección de red, descartar
+    }
+
+    // Si hay múltiples avatares/fotos superpuestas, es una sección grupal (falso positivo)
+    const avatarImgs = container.querySelectorAll('img[src*="licdn.com"]');
+    if (avatarImgs.length > 2) {
+      // Más de 2 imágenes sin botón de mensaje directo → sección de red
+      const hasDirectMsgLink = container.querySelector(
+        'a[href*="JOB_DETAILS_HIRING_TEAM"], a[href*="/messaging/compose"]'
+      );
+      if (!hasDirectMsgLink) return true;
+    }
+
+    return false;
   }
 
   // ── Extrae datos del recruiter desde el contenedor encontrado ──────────────
