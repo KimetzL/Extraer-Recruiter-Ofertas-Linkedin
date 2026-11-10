@@ -546,30 +546,23 @@
         return false;
       }
 
-      // Scroll suave y visible hacia la tarjeta
+      // Scroll suave hacia la tarjeta
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // IMPORTANTE: Buscar ÚNICAMENTE el enlace del título del puesto.
-      // NUNCA hacer click en elementos <button> de la tarjeta porque LinkedIn pone ahí botones
-      // automáticos de acción como "Expresar interés", "Compartir perfil", "Guardar" o "Solicitar".
+      // Buscar ÚNICAMENTE el enlace del título del puesto (a.job-card-list__title)
       const titleLink = targetCard.querySelector(
         'a.job-card-list__title, ' +
-        'a.job-card-container__link, ' +
-        'a[href*="/jobs/view/"], ' +
-        'a[href*="currentJobId="]'
+        'a.job-card-container__link'
       );
 
       if (titleLink) {
+        titleLink.focus();
         titleLink.click();
-      } else {
-        // Si no hay enlace específico, click en el propio contenedor solo si no es botón interactivo
-        targetCard.click();
       }
 
       // Cerrar posibles modales espontáneos que LinkedIn abra
       dismissAnyModalDialog();
 
-      // Devolver confirmación de click
       sendResponse({ success: true });
       return false;
     }
@@ -589,47 +582,39 @@
   });
 
   function getJobCardElements() {
-    // Lista exhaustiva y moderna de selectores para las tarjetas de la lista izquierda de LinkedIn
-    const candidateSelectors = [
-      'li[data-occludable-job-id]',
-      '[data-job-id]',
-      '.jobs-search-results__list-item',
-      '.jobs-search-results-list__list-item',
-      '.job-card-container',
-      '.job-card-list',
-      '.scaffold-layout__list-container li',
-      'ul.jobs-search__results-list li',
-      'div[data-view-name="job-card"]'
+    // Buscar ÚNICAMENTE los enlaces al título del puesto en el panel izquierdo de búsqueda
+    // Selectores específicos de LinkedIn para el enlace del título de la oferta en la lista:
+    const linkSelectors = [
+      '.jobs-search-results-list a.job-card-list__title',
+      '.jobs-search-results-list a.job-card-container__link',
+      '.scaffold-layout__list-container a.job-card-list__title',
+      '.scaffold-layout__list-container a.job-card-container__link',
+      'ul.jobs-search__results-list a.job-card-list__title',
+      'a.job-card-list__title',
+      'a.job-card-container__link'
     ];
 
-    for (const sel of candidateSelectors) {
-      const items = Array.from(document.querySelectorAll(sel));
-      if (items.length > 0) {
-        // Filtrar elementos duplicados o que no sean tarjetas reales
-        const cardsWithLinks = items.filter(el => {
-          return el.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId"], a.job-card-list__title') ||
-                 el.getAttribute('data-job-id') ||
-                 el.getAttribute('data-occludable-job-id');
-        });
-        if (cardsWithLinks.length > 0) {
-          return cardsWithLinks;
-        }
+    for (const sel of linkSelectors) {
+      const links = Array.from(document.querySelectorAll(sel));
+      // Filtrar los que no estén ocultos o pertenezcan a banners
+      const validLinks = links.filter(a => {
+        const text = a.textContent.trim().toLowerCase();
+        // NUNCA enlaces de feedback o configuración
+        return text && !text.includes('útil') && !text.includes('coincidencia') && a.closest('li');
+      });
+
+      if (validLinks.length > 0) {
+        // Devolvemos el li contenedor de cada título
+        return validLinks.map(a => a.closest('li'));
       }
     }
 
-    // Estrategia de rescate: buscar directamente los enlaces a ofertas en la columna izquierda/lista
-    const links = Array.from(document.querySelectorAll('a[href*="/jobs/view/"], a[href*="currentJobId="]'));
-    if (links.length > 0) {
-      // Subir al contenedor padre tipo li o tarjeta
-      const cardMap = new Map();
-      for (const a of links) {
-        let parent = a.closest('li') || a.closest('.job-card-container') || a.parentElement;
-        if (parent && !cardMap.has(parent)) {
-          cardMap.set(parent, parent);
-        }
-      }
-      if (cardMap.size > 0) {
-        return Array.from(cardMap.values());
+    // Estrategia de rescate estricta: solo elementos en la columna scaffold-layout__list o jobs-search-results-list
+    const container = document.querySelector('.scaffold-layout__list, .jobs-search-results-list');
+    if (container) {
+      const items = Array.from(container.querySelectorAll('li[data-occludable-job-id]'));
+      if (items.length > 0) {
+        return items;
       }
     }
 
