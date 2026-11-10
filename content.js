@@ -549,9 +549,25 @@
       // Scroll suave y visible hacia la tarjeta
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // Click en el enlace principal de la tarjeta
-      const clickable = targetCard.querySelector('a[href*="/jobs/view/"], .job-card-list__title, button') || targetCard;
-      clickable.click();
+      // IMPORTANTE: Buscar ÚNICAMENTE el enlace del título del puesto.
+      // NUNCA hacer click en elementos <button> de la tarjeta porque LinkedIn pone ahí botones
+      // automáticos de acción como "Expresar interés", "Compartir perfil", "Guardar" o "Solicitar".
+      const titleLink = targetCard.querySelector(
+        'a.job-card-list__title, ' +
+        'a.job-card-container__link, ' +
+        'a[href*="/jobs/view/"], ' +
+        'a[href*="currentJobId="]'
+      );
+
+      if (titleLink) {
+        titleLink.click();
+      } else {
+        // Si no hay enlace específico, click en el propio contenedor solo si no es botón interactivo
+        targetCard.click();
+      }
+
+      // Cerrar posibles modales espontáneos que LinkedIn abra
+      dismissAnyModalDialog();
 
       // Devolver confirmación de click
       sendResponse({ success: true });
@@ -636,5 +652,25 @@
     }
 
     return null;
+  }
+
+  // ── Cierra modales intrusivos de LinkedIn ──────────────────────────────────
+  function dismissAnyModalDialog() {
+    setTimeout(() => {
+      // Buscar botón de cerrar en modales de LinkedIn (artdeco-modal)
+      const dismissButtons = [
+        document.querySelector('.artdeco-modal button[aria-label="Cerrar"]'),
+        document.querySelector('.artdeco-modal button[aria-label="Dismiss"]'),
+        document.querySelector('.artdeco-modal button[aria-label="Close"]'),
+        document.querySelector('.artdeco-modal .artdeco-modal__dismiss')
+      ];
+
+      for (const btn of dismissButtons) {
+        if (btn) {
+          btn.click();
+          break;
+        }
+      }
+    }, 400);
   }
 })();
