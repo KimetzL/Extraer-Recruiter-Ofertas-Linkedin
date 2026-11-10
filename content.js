@@ -549,15 +549,19 @@
       // Scroll suave hacia la tarjeta
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // Buscar ÚNICAMENTE el enlace del título del puesto (a.job-card-list__title)
-      const titleLink = targetCard.querySelector(
-        'a.job-card-list__title, ' +
-        'a.job-card-container__link'
-      );
-
-      if (titleLink) {
-        titleLink.focus();
-        titleLink.click();
+      // Si targetCard ya es un enlace directo <a>, hacer click directamente en él
+      if (targetCard.tagName === 'A') {
+        targetCard.focus();
+        targetCard.click();
+      } else {
+        // Buscar el enlace del puesto dentro del elemento
+        const titleLink = targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+        if (titleLink) {
+          titleLink.focus();
+          titleLink.click();
+        } else {
+          targetCard.click();
+        }
       }
 
       // Cerrar posibles modales espontáneos que LinkedIn abra
@@ -582,43 +586,46 @@
   });
 
   function getJobCardElements() {
-    // Buscar ÚNICAMENTE los enlaces al título del puesto en el panel izquierdo de búsqueda
-    // Selectores específicos de LinkedIn para el enlace del título de la oferta en la lista:
-    const linkSelectors = [
-      '.jobs-search-results-list a.job-card-list__title',
-      '.jobs-search-results-list a.job-card-container__link',
-      '.scaffold-layout__list-container a.job-card-list__title',
-      '.scaffold-layout__list-container a.job-card-container__link',
-      'ul.jobs-search__results-list a.job-card-list__title',
-      'a.job-card-list__title',
-      'a.job-card-container__link'
-    ];
+    // Buscar todos los enlaces que abren ofertas de empleo en la columna izquierda
+    // Como vimos en tu captura: <a class="igthn4 igtl58" href="https://www.linkedin.com/jobs/view/4457603604/...">Analyst</a>
+    const allJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
 
-    for (const sel of linkSelectors) {
-      const links = Array.from(document.querySelectorAll(sel));
-      // Filtrar los que no estén ocultos o pertenezcan a banners
-      const validLinks = links.filter(a => {
-        const text = a.textContent.trim().toLowerCase();
-        // NUNCA enlaces de feedback o configuración
-        return text && !text.includes('útil') && !text.includes('coincidencia') && a.closest('li');
-      });
+    // Filtrar para quedarnos SOLO con los enlaces de ofertas reales (tienen texto con el nombre del puesto)
+    // y descartar duplicados o enlaces auxiliares
+    const seenUrls = new Set();
+    const validJobLinks = [];
 
-      if (validLinks.length > 0) {
-        // Devolvemos el li contenedor de cada título
-        return validLinks.map(a => a.closest('li'));
+    for (const a of allJobLinks) {
+      // Ignorar si está dentro del panel de detalle derecho (solo queremos la lista izquierda de resultados)
+      if (a.closest('.jobs-details__main-content') || a.closest('.job-view-layout') || a.closest('.job-details-jobs-unified-top-card')) {
+        continue;
+      }
+
+      const cleanHref = a.href.split('?')[0];
+      const text = a.textContent.trim().toLowerCase();
+
+      // Debe ser una URL de oferta válida con texto de puesto (no botones de feedback o vacíos)
+      if (cleanHref.includes('/jobs/view/') && text.length > 2 && !seenUrls.has(cleanHref)) {
+        // Excluir textos que sean encuestas o configuraciones
+        if (!text.includes('útil') && !text.includes('coincidencia') && !text.includes('guardar') && !text.includes('verificado')) {
+          seenUrls.add(cleanHref);
+          validJobLinks.push(a);
+        }
       }
     }
 
-    // Estrategia de rescate estricta: solo elementos en la columna scaffold-layout__list o jobs-search-results-list
-    const container = document.querySelector('.scaffold-layout__list, .jobs-search-results-list');
-    if (container) {
-      const items = Array.from(container.querySelectorAll('li[data-occludable-job-id]'));
-      if (items.length > 0) {
-        return items;
-      }
+    if (validJobLinks.length > 0) {
+      return validJobLinks;
     }
 
-    return [];
+    // Fallback secundario si la búsqueda usa currentJobId
+    const currentIdLinks = Array.from(document.querySelectorAll('a[href*="currentJobId="]'));
+    const validCurrentIdLinks = currentIdLinks.filter(a => {
+      const t = a.textContent.trim();
+      return t.length > 2 && !t.toLowerCase().includes('útil');
+    });
+
+    return validCurrentIdLinks;
   }
 
   function findNextPageButton() {
