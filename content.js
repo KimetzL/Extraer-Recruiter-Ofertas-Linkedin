@@ -573,20 +573,48 @@
   });
 
   function getJobCardElements() {
-    // Selectores para la lista lateral de empleos en LinkedIn Jobs
-    const cardSelectors = [
+    // Lista exhaustiva y moderna de selectores para las tarjetas de la lista izquierda de LinkedIn
+    const candidateSelectors = [
       'li[data-occludable-job-id]',
+      '[data-job-id]',
+      '.jobs-search-results__list-item',
       '.jobs-search-results-list__list-item',
-      '.scaffold-layout__list-container > li',
       '.job-card-container',
-      '[data-job-id]'
+      '.job-card-list',
+      '.scaffold-layout__list-container li',
+      'ul.jobs-search__results-list li',
+      'div[data-view-name="job-card"]'
     ];
 
-    for (const sel of cardSelectors) {
+    for (const sel of candidateSelectors) {
       const items = Array.from(document.querySelectorAll(sel));
-      // Filtrar aquellos que realmente representen ofertas de empleo
-      const valid = items.filter(el => el.querySelector('a[href*="/jobs/"]') || el.getAttribute('data-job-id'));
-      if (valid.length > 0) return valid;
+      if (items.length > 0) {
+        // Filtrar elementos duplicados o que no sean tarjetas reales
+        const cardsWithLinks = items.filter(el => {
+          return el.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId"], a.job-card-list__title') ||
+                 el.getAttribute('data-job-id') ||
+                 el.getAttribute('data-occludable-job-id');
+        });
+        if (cardsWithLinks.length > 0) {
+          return cardsWithLinks;
+        }
+      }
+    }
+
+    // Estrategia de rescate: buscar directamente los enlaces a ofertas en la columna izquierda/lista
+    const links = Array.from(document.querySelectorAll('a[href*="/jobs/view/"], a[href*="currentJobId="]'));
+    if (links.length > 0) {
+      // Subir al contenedor padre tipo li o tarjeta
+      const cardMap = new Map();
+      for (const a of links) {
+        let parent = a.closest('li') || a.closest('.job-card-container') || a.parentElement;
+        if (parent && !cardMap.has(parent)) {
+          cardMap.set(parent, parent);
+        }
+      }
+      if (cardMap.size > 0) {
+        return Array.from(cardMap.values());
+      }
     }
 
     return [];
