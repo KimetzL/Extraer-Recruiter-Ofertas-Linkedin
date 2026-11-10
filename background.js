@@ -69,4 +69,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  // ── Relay de comandos de Autopilot entre Sidepanel y Content Script ──────
+  if (message.type?.startsWith('AUTOPILOT_')) {
+    // Si viene del panel lateral, reenviar a la pestaña activa de LinkedIn
+    if (sender.url?.includes('sidepanel')) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const activeTab = tabs[0];
+        if (!activeTab || !activeTab.id || !activeTab.url?.includes('linkedin.com')) {
+          sendResponse({ success: false, error: 'Debes estar en una pestaña activa de LinkedIn' });
+          return;
+        }
+        chrome.tabs.sendMessage(activeTab.id, message, (resp) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          } else {
+            sendResponse(resp);
+          }
+        });
+      });
+      return true; // Asíncrono
+    }
+
+    // Si viene del Content Script hacia el Sidepanel (ej. progreso, fin)
+    chrome.runtime.sendMessage(message).catch(() => {});
+    return false;
+  }
 });

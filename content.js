@@ -524,4 +524,89 @@
 
   // Ejecución inicial
   scanAndProcess();
+
+  // ── Módulo Actor de Autopilot ──────────────────────────────────────────────
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'AUTOPILOT_GET_CARDS') {
+      const cards = getJobCardElements();
+      sendResponse({
+        success: true,
+        count: cards.length,
+        hasPagination: !!findNextPageButton()
+      });
+      return false;
+    }
+
+    if (message.type === 'AUTOPILOT_CLICK_CARD') {
+      const cards = getJobCardElements();
+      const targetCard = cards[message.index];
+
+      if (!targetCard) {
+        sendResponse({ success: false, error: 'Tarjeta no encontrada en el índice' });
+        return false;
+      }
+
+      // Scroll suave y visible hacia la tarjeta
+      targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      // Click en el enlace principal de la tarjeta
+      const clickable = targetCard.querySelector('a[href*="/jobs/view/"], .job-card-list__title, button') || targetCard;
+      clickable.click();
+
+      // Devolver confirmación de click
+      sendResponse({ success: true });
+      return false;
+    }
+
+    if (message.type === 'AUTOPILOT_NEXT_PAGE') {
+      const nextBtn = findNextPageButton();
+      if (!nextBtn) {
+        sendResponse({ success: false, error: 'No hay más páginas disponibles' });
+        return false;
+      }
+
+      nextBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nextBtn.click();
+      sendResponse({ success: true });
+      return false;
+    }
+  });
+
+  function getJobCardElements() {
+    // Selectores para la lista lateral de empleos en LinkedIn Jobs
+    const cardSelectors = [
+      'li[data-occludable-job-id]',
+      '.jobs-search-results-list__list-item',
+      '.scaffold-layout__list-container > li',
+      '.job-card-container',
+      '[data-job-id]'
+    ];
+
+    for (const sel of cardSelectors) {
+      const items = Array.from(document.querySelectorAll(sel));
+      // Filtrar aquellos que realmente representen ofertas de empleo
+      const valid = items.filter(el => el.querySelector('a[href*="/jobs/"]') || el.getAttribute('data-job-id'));
+      if (valid.length > 0) return valid;
+    }
+
+    return [];
+  }
+
+  function findNextPageButton() {
+    // Botón de página siguiente (flecha o texto Siguiente/Next)
+    const candidates = [
+      document.querySelector('button[aria-label="Siguiente"]'),
+      document.querySelector('button[aria-label="Next"]'),
+      document.querySelector('.jobs-search-pagination__button--next'),
+      document.querySelector('button.artdeco-pagination__button--next')
+    ];
+
+    for (const b of candidates) {
+      if (b && !b.disabled && !b.classList.contains('artdeco-button--disabled')) {
+        return b;
+      }
+    }
+
+    return null;
+  }
 })();

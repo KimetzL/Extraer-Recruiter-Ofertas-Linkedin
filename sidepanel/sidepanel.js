@@ -39,6 +39,23 @@
   const detailSavedAt = document.getElementById('detail-saved-at');
   const detailDescription = document.getElementById('detail-description');
 
+  // Elementos de Autopilot
+  const btnAutopilot = document.getElementById('btn-autopilot');
+  const btnAutopilotLabel = document.getElementById('btn-autopilot-label');
+  const autopilotDelaySelect = document.getElementById('autopilot-delay');
+  const autopilotMaxInput = document.getElementById('autopilot-max');
+  const autopilotProgress = document.getElementById('autopilot-progress');
+  const autopilotProgressFill = document.getElementById('autopilot-progress-fill');
+  const autopilotStatusText = document.getElementById('autopilot-status-text');
+  const autopilotCounter = document.getElementById('autopilot-counter');
+
+  let isAutopilotRunning = false;
+  let autopilotTimer = null;
+  let autopilotCurrentIndex = 0;
+  let autopilotTotalScanned = 0;
+  let autopilotMaxToScan = 50;
+  let autopilotInitialSavedCount = 0;
+
   // ── Cargar ofertas guardadas ───────────────────────────────────────────────
   async function loadJobs() {
     chrome.runtime.sendMessage({ type: 'GET_JOBS' }, (response) => {
@@ -480,6 +497,131 @@
     }
   }
 
+  // ── Lógica de Autopilot ───────────────────────────────────────────────────
+  function toggleAutopilot() {
+    if (isAutopilotRunning) {
+      stopAutopilot('Detenido por el usuario');
+    } else {
+      startAutopilot();
+    }
+  }
+
+  function startAutopilot() {
+    autopilotMaxToScan = parseInt(autopilotMaxInput.value, 10) || 50;
+    autopilotCurrentIndex = 0;
+    autopilotTotalScanned = 0;
+    autopilotInitialSavedCount = allJobs.length;
+    isAutopilotRunning = true;
+
+    btnAutopilot.classList.add('running');
+    btnAutopilotLabel.textContent = 'Detener';
+    autopilotProgress.style.display = 'flex';
+    autopilotProgressFill.style.width = '0%';
+    autopilotStatusText.textContent = 'Conectando con LinkedIn...';
+    autopilotCounter.textContent = `0 / ${autopilotMaxToScan}`;
+
+    // Paso 1: Consultar tarjetas disponibles en la página activa
+    chrome.runtime.sendMessage({ type: 'AUTOPILOT_GET_CARDS' }, (response) => {
+      if (chrome.runtime.lastError || !response || !response.success) {
+        stopAutopilot(response?.error || 'Abre LinkedIn Jobs en la pestaña activa');
+        return;
+      }
+
+      if (response.count === 0) {
+        stopAutopilot('No se encontraron ofertas en la página');
+        return;
+      }
+
+      autopilotStatusText.textContent = `Escaneando página (0/${response.count})...`;
+      runAutopilotStep();
+    });
+  }
+
+  function runAutopilotStep() {
+    if (!isAutopilotRunning) return;
+
+    if (autopilotTotalScanned >= autopilotMaxToScan) {
+      const foundCount = allJobs.length - autopilotInitialSavedCount;
+      stopAutopilot(`Completado: ${autopilotTotalScanned} revisadas, ${foundCount > 0 ? foundCount : 0} guardadas`);
+      return;
+    }
+
+    // Pedir tarjetas disponibles actualmente
+    chrome.runtime.sendMessage({ type: 'AUTOPILOT_GET_CARDS' }, (response) => {
+      if (!isAutopilotRunning) return;
+      if (chrome.runtime.lastError || !response || !response.success) {
+        stopAutopilot('Pestaña no disponible');
+        return;
+      }
+
+      const totalCardsInPage = response.count;
+
+      // Si terminamos todas las tarjetas de esta página, intentar avanzar a la siguiente página
+      if (autopilotCurrentIndex >= totalCardsInPage) {
+        if (response.hasPagination) {
+          autopilotStatusText.textContent = 'Cambiando a siguiente página...';
+          chrome.runtime.sendMessage({ type: 'AUTOPILOT_NEXT_PAGE' }, (pResponse) => {
+            if (!isAutopilotRunning) return;
+            if (pResponse && pResponse.success) {
+              autopilotCurrentIndex = 0;
+              // Esperar a que renderice la nueva página
+              autopilotTimer = setTimeout(() => {
+                runAutopilotStep();
+              }, 3200);
+            } else {
+              stopAutopilot('Fin de resultados');
+            }
+          });
+        } else {
+          stopAutopilot('Fin de resultados');
+        }
+        return;
+      }
+
+      // Hacer click en la tarjeta del índice actual
+      autopilotStatusText.textContent = `Abriendo oferta ${autopilotCurrentIndex + 1}/${totalCardsInPage}...`;
+      chrome.runtime.sendMessage({
+        type: 'AUTOPILOT_CLICK_CARD',
+        index: autopilotCurrentIndex
+      }, (cResponse) => {
+        if (!isAutopilotRunning) return;
+
+        autopilotCurrentIndex++;
+        autopilotTotalScanned++;
+
+        // Actualizar barra de progreso
+        const pct = Math.min(100, Math.round((autopilotTotalScanned / autopilotMaxToScan) * 100));
+        autopilotProgressFill.style.width = `${pct}%`;
+        autopilotCounter.textContent = `${autopilotTotalScanned} / ${autopilotMaxToScan}`;
+
+        // Calcular retardo con un ligero factor aleatorio (Jitter ±15%)
+        const baseDelay = parseInt(autopilotDelaySelect.value, 10) || 2000;
+        const jitter = (Math.random() * 0.3 - 0.15) * baseDelay;
+        const delayWithJitter = Math.max(1000, Math.round(baseDelay + jitter));
+
+        autopilotTimer = setTimeout(() => {
+          runAutopilotStep();
+        }, delayWithJitter);
+      });
+    });
+  }
+
+  function stopAutopilot(message) {
+    isAutopilotRunning = false;
+    if (autopilotTimer) {
+      clearTimeout(autopilotTimer);
+      autopilotTimer = null;
+    }
+
+    btnAutopilot.classList.remove('running');
+    btnAutopilotLabel.textContent = 'Auto-Pilot';
+
+    if (message) {
+      autopilotStatusText.textContent = message;
+      showPanelToast(message, 'info');
+    }
+  }
+
   // ── Event Listeners ────────────────────────────────────────────────────────
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value.trim();
@@ -535,6 +677,10 @@
         closeDetailModal();
       }
     });
+  }
+
+  if (btnAutopilot) {
+    btnAutopilot.addEventListener('click', toggleAutopilot);
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
