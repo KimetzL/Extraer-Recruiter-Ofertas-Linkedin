@@ -110,6 +110,59 @@
         </div>
       </div>
     </dialog>
+
+    <!-- Modal de detalle de la oferta -->
+    <dialog class="detail-modal" id="detail-dialog">
+      <div class="detail-content">
+        <div class="detail-header">
+          <div class="detail-header-title">
+            <span class="detail-header-icon">📋</span>
+            <h3 class="detail-title">Detalles de la oferta</h3>
+          </div>
+          <button type="button" id="detail-btn-close" class="detail-close-btn" title="Cerrar">✕</button>
+        </div>
+
+        <div class="detail-body">
+          <div class="detail-section">
+            <div class="detail-row"><span class="detail-label">Puesto:</span> <span id="detail-job-title" class="detail-value font-highlight"></span></div>
+            <div class="detail-row"><span class="detail-label">Empresa:</span> <span id="detail-company" class="detail-value"></span></div>
+            <div class="detail-row"><span class="detail-label">Ubicación:</span> <span id="detail-location" class="detail-value"></span></div>
+          </div>
+
+          <div class="detail-divider"></div>
+
+          <div class="detail-section">
+            <div class="detail-row"><span class="detail-label">Recruiter:</span> <span id="detail-recruiter-name" class="detail-value font-highlight"></span></div>
+            <div class="detail-row"><span class="detail-label">Cargo:</span> <span id="detail-recruiter-title" class="detail-value text-muted"></span></div>
+            <div class="detail-row"><span class="detail-label">Perfil:</span> <a id="detail-recruiter-url" class="detail-link" target="_blank" rel="noopener noreferrer"></a></div>
+            <div class="detail-row"><span class="detail-label">Oferta:</span> <a id="detail-job-url" class="detail-link" target="_blank" rel="noopener noreferrer"></a></div>
+            <div class="detail-row"><span class="detail-label">Guardada:</span> <span id="detail-saved-at" class="detail-value text-muted"></span></div>
+          </div>
+
+          <div class="detail-divider"></div>
+
+          <div class="detail-description-wrapper">
+            <div class="detail-description-header">
+              <span class="detail-description-title">Acerca del empleo</span>
+            </div>
+            <div class="detail-description-box" id="detail-description">
+              <!-- Se rellena dinámicamente -->
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-footer">
+          <button type="button" id="detail-btn-copy" class="btn-copy-all">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span id="detail-btn-copy-text">Copiar todo</span>
+          </button>
+          <button type="button" id="detail-btn-close2" class="btn-cancel">Cerrar</button>
+        </div>
+      </div>
+    </dialog>
   </div>
 
   <script src="sidepanel.js"></script>

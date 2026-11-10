@@ -6,6 +6,7 @@
   let allJobs = [];
   let searchQuery = '';
   let pendingConfirmAction = null;
+  let currentDetailJob = null;
 
   const jobsList = document.getElementById('jobs-list');
   const emptyState = document.getElementById('empty-state');
@@ -21,6 +22,22 @@
   const confirmMessage = document.getElementById('confirm-message');
   const confirmBtnOk = document.getElementById('confirm-btn-ok');
   const confirmBtnCancel = document.getElementById('confirm-btn-cancel');
+
+  // Elementos del Modal de Detalle
+  const detailDialog = document.getElementById('detail-dialog');
+  const detailBtnClose = document.getElementById('detail-btn-close');
+  const detailBtnClose2 = document.getElementById('detail-btn-close2');
+  const detailBtnCopy = document.getElementById('detail-btn-copy');
+  const detailBtnCopyText = document.getElementById('detail-btn-copy-text');
+  const detailJobTitle = document.getElementById('detail-job-title');
+  const detailCompany = document.getElementById('detail-company');
+  const detailLocation = document.getElementById('detail-location');
+  const detailRecruiterName = document.getElementById('detail-recruiter-name');
+  const detailRecruiterTitle = document.getElementById('detail-recruiter-title');
+  const detailRecruiterUrl = document.getElementById('detail-recruiter-url');
+  const detailJobUrl = document.getElementById('detail-job-url');
+  const detailSavedAt = document.getElementById('detail-saved-at');
+  const detailDescription = document.getElementById('detail-description');
 
   // ── Cargar ofertas guardadas ───────────────────────────────────────────────
   async function loadJobs() {
@@ -84,6 +101,15 @@
           requestDeleteJob(btn.dataset.delete);
         });
       });
+
+      // Event listeners para ver detalles de la oferta
+      jobsList.querySelectorAll('[data-info]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openDetailModal(btn.dataset.info);
+        });
+      });
     }
   }
 
@@ -140,6 +166,9 @@
         <div class="card-actions">
           <div class="card-date" title="Fecha de guardado">${date}</div>
           <div class="card-links">
+            <button class="card-btn card-btn-info" data-info="${escapeHtml(job.jobId)}" title="Ver detalles y copiar texto">
+              📋 Info
+            </button>
             ${messageBtn}
             ${recruiterUrl}
             ${jobUrl}
@@ -339,6 +368,118 @@
       .replace(/"/g, '&quot;');
   }
 
+  // ── Modal de Detalle y Copiar Info ───────────────────────────────────────
+  function openDetailModal(jobId) {
+    const job = allJobs.find(j => j.jobId === jobId);
+    if (!job) return;
+
+    currentDetailJob = job;
+
+    detailJobTitle.textContent = job.jobTitle || 'Oferta en LinkedIn';
+    detailCompany.textContent = job.company || 'Empresa no especificada';
+    detailLocation.textContent = job.location || 'No especificada';
+
+    detailRecruiterName.textContent = job.recruiterName || 'Recruiter de la oferta';
+    detailRecruiterTitle.textContent = job.recruiterTitle || 'Equipo de contratación';
+
+    if (job.recruiterProfileUrl) {
+      detailRecruiterUrl.href = job.recruiterProfileUrl;
+      detailRecruiterUrl.textContent = job.recruiterProfileUrl;
+      detailRecruiterUrl.style.display = 'inline';
+    } else {
+      detailRecruiterUrl.removeAttribute('href');
+      detailRecruiterUrl.textContent = 'No disponible';
+    }
+
+    if (job.jobUrl) {
+      detailJobUrl.href = job.jobUrl;
+      detailJobUrl.textContent = job.jobUrl;
+      detailJobUrl.style.display = 'inline';
+    } else {
+      detailJobUrl.removeAttribute('href');
+      detailJobUrl.textContent = 'No disponible';
+    }
+
+    if (job.savedAt) {
+      const savedDate = new Date(job.savedAt);
+      detailSavedAt.textContent = `${formatDate(job.savedAt)} (${savedDate.toLocaleString('es-ES')})`;
+    } else {
+      detailSavedAt.textContent = 'Desconocida';
+    }
+
+    if (job.jobDescription && job.jobDescription.trim()) {
+      detailDescription.textContent = job.jobDescription.trim();
+    } else {
+      detailDescription.textContent = '(Descripción no disponible para esta oferta o guardada antes de esta versión)';
+    }
+
+    if (detailDialog) {
+      detailDialog.showModal();
+    }
+  }
+
+  function closeDetailModal() {
+    if (detailDialog && detailDialog.open) {
+      detailDialog.close();
+    }
+    currentDetailJob = null;
+  }
+
+  function buildCopyText(job) {
+    if (!job) return '';
+
+    const puesto = job.jobTitle || 'Oferta en LinkedIn';
+    const empresa = job.company || 'Empresa en LinkedIn';
+    const ubicacion = job.location || 'No especificada';
+    const recName = job.recruiterName || 'Recruiter';
+    const recTitle = job.recruiterTitle ? ` (${job.recruiterTitle})` : '';
+    const perfil = job.recruiterProfileUrl || 'No disponible';
+    const oferta = job.jobUrl || 'No disponible';
+    const guardada = job.savedAt ? new Date(job.savedAt).toLocaleString('es-ES') : '';
+    const desc = job.jobDescription && job.jobDescription.trim() ? job.jobDescription.trim() : 'No disponible';
+
+    return [
+      `Puesto: ${puesto}`,
+      `Empresa: ${empresa}`,
+      `Ubicación: ${ubicacion}`,
+      `Recruiter: ${recName}${recTitle}`,
+      `Perfil: ${perfil}`,
+      `Oferta: ${oferta}`,
+      `Guardada: ${guardada}`,
+      '',
+      '──────── Acerca del empleo ────────',
+      '',
+      desc
+    ].join('\n');
+  }
+
+  async function handleCopyAll() {
+    if (!currentDetailJob) return;
+
+    const text = buildCopyText(currentDetailJob);
+    try {
+      await navigator.clipboard.writeText(text);
+      if (detailBtnCopyText) {
+        detailBtnCopyText.textContent = '✓ ¡Copiado!';
+      }
+      if (detailBtnCopy) {
+        detailBtnCopy.classList.add('btn-copy-success');
+      }
+      setTimeout(() => {
+        if (detailBtnCopyText) {
+          detailBtnCopyText.textContent = 'Copiar todo';
+        }
+        if (detailBtnCopy) {
+          detailBtnCopy.classList.remove('btn-copy-success');
+        }
+      }, 1800);
+      showPanelToast('Información copiada al portapapeles');
+    } catch (err) {
+      console.error('Error al copiar al portapapeles:', err);
+      showPanelToast('Error al copiar texto', 'info');
+    }
+  }
+
   // ── Event Listeners ────────────────────────────────────────────────────────
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value.trim();
@@ -371,6 +512,27 @@
     confirmDialog.addEventListener('click', (e) => {
       if (e.target === confirmDialog) {
         closeConfirmModal();
+      }
+    });
+  }
+
+  // Listeners del Modal de Detalle
+  if (detailBtnClose) {
+    detailBtnClose.addEventListener('click', closeDetailModal);
+  }
+
+  if (detailBtnClose2) {
+    detailBtnClose2.addEventListener('click', closeDetailModal);
+  }
+
+  if (detailBtnCopy) {
+    detailBtnCopy.addEventListener('click', handleCopyAll);
+  }
+
+  if (detailDialog) {
+    detailDialog.addEventListener('click', (e) => {
+      if (e.target === detailDialog) {
+        closeDetailModal();
       }
     });
   }

@@ -296,12 +296,41 @@
       }
     }
 
+    // 4. Descripción ("Acerca del empleo")
+    let jobDescription = '';
+    const descCandidates = [
+      document.querySelector('.jobs-description-content__text'),
+      document.querySelector('.jobs-box__html-content'),
+      document.querySelector('#job-details'),
+      document.querySelector('.jobs-description__content'),
+      document.querySelector('[class*="description"] article')
+    ];
+
+    for (const el of descCandidates) {
+      if (el && el.textContent.trim()) {
+        const clone = el.cloneNode(true);
+        // Quitar botones o decoraciones
+        clone.querySelectorAll('button, svg, [aria-hidden="true"]').forEach(e => e.remove());
+        // Convertir párrafos y saltos de línea para preservar el formato
+        clone.querySelectorAll('p, br, li, div, h1, h2, h3, h4').forEach(block => {
+          block.after('\n');
+        });
+        const rawText = clone.textContent.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+        if (rawText.length > 30) {
+          // Limitar a máximo 8000 caracteres para no saturar storage
+          jobDescription = rawText.slice(0, 8000);
+          break;
+        }
+      }
+    }
+
     return {
       jobId: jobId || String(Date.now()),
       jobTitle,
       company,
       companyUrl,
       location,
+      jobDescription,
       jobUrl: jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : window.location.href.split('?')[0]
     };
   }
