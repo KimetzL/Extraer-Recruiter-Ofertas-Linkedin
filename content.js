@@ -549,19 +549,26 @@
       // Scroll suave hacia la tarjeta
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // Si targetCard ya es un enlace directo <a>, hacer click directamente en él
-      if (targetCard.tagName === 'A') {
-        targetCard.focus();
-        targetCard.click();
-      } else {
-        // Buscar el enlace del puesto dentro del elemento
-        const titleLink = targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
-        if (titleLink) {
-          titleLink.focus();
-          titleLink.click();
-        } else {
-          targetCard.click();
+      // Localizar el enlace de la tarjeta
+      const targetLink = targetCard.tagName === 'A' ? targetCard : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+
+      if (targetLink) {
+        // 1. Evitar navegación completa o apertura en nueva pestaña si tuviera target="_blank"
+        if (targetLink.hasAttribute('target')) {
+          targetLink.removeAttribute('target');
         }
+
+        // 2. Foco y disparo de un MouseEvent real nativo compatible con el router de LinkedIn (Ember/React)
+        targetLink.focus();
+        const mouseEvent = new MouseEvent('click', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          buttons: 1
+        });
+        targetLink.dispatchEvent(mouseEvent);
+      } else {
+        targetCard.click();
       }
 
       // Cerrar posibles modales espontáneos que LinkedIn abra
