@@ -546,29 +546,37 @@
         return false;
       }
 
-      // Scroll suave hacia la tarjeta
+      // 1. Scroll visible hacia la tarjeta en la lista lateral
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // Extraer el Job ID de la tarjeta / enlace
+      // 2. Extraer el Job ID
       const href = targetCard.href || targetCard.getAttribute('href') || '';
       const match = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
       const targetJobId = match ? match[1] : null;
 
-      // Intentar hacer click en el CONTENEDOR <li> o tarjeta padre (así selecciona LinkedIn normalmente sin navegar)
-      const parentCard = targetCard.closest('li') || targetCard.parentElement;
+      // 3. Simular clic real con preventDefault en caso de navegación tradicional
+      // Buscar elementos interactivos internos de la tarjeta
+      const clickableCandidate = targetCard.querySelector('.job-card-list__title, .artdeco-entity-lockup__title, h3, strong') || targetCard;
 
-      // Disparar click en el contenedor
-      if (parentCard) {
-        parentCard.click();
-      }
-      
-      // Si la URL tiene parámetro currentJobId en LinkedIn, actualizar el estado SPA directamente
+      clickableCandidate.focus();
+
+      // Disparamos evento de ratón completo
+      ['mousedown', 'mouseup', 'click'].forEach(evtType => {
+        clickableCandidate.dispatchEvent(new MouseEvent(evtType, {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          buttons: 1
+        }));
+      });
+
+      // 4. Si el router de LinkedIn no cambia automáticamente la oferta por el clic de ratón,
+      // actualizamos la URL con currentJobId para obligar a cargar el panel derecho:
       if (targetJobId) {
         const currentUrl = new URL(window.location.href);
         if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
           currentUrl.searchParams.set('currentJobId', targetJobId);
-          window.history.pushState({}, '', currentUrl.toString());
-          // Disparar evento popstate/locationchange para que el router de LinkedIn cargue el panel derecho
+          window.history.pushState({ jobId: targetJobId }, '', currentUrl.toString());
           window.dispatchEvent(new PopStateEvent('popstate'));
         }
       }
@@ -576,7 +584,7 @@
       // Cerrar posibles modales espontáneos que LinkedIn abra
       dismissAnyModalDialog();
 
-      sendResponse({ success: true });
+      sendResponse({ success: true, jobId: targetJobId });
       return false;
     }
 
