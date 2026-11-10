@@ -296,33 +296,8 @@
       }
     }
 
-    // 4. Descripción ("Acerca del empleo")
-    let jobDescription = '';
-    const descCandidates = [
-      document.querySelector('.jobs-description-content__text'),
-      document.querySelector('.jobs-box__html-content'),
-      document.querySelector('#job-details'),
-      document.querySelector('.jobs-description__content'),
-      document.querySelector('[class*="description"] article')
-    ];
-
-    for (const el of descCandidates) {
-      if (el && el.textContent.trim()) {
-        const clone = el.cloneNode(true);
-        // Quitar botones o decoraciones
-        clone.querySelectorAll('button, svg, [aria-hidden="true"]').forEach(e => e.remove());
-        // Convertir párrafos y saltos de línea para preservar el formato
-        clone.querySelectorAll('p, br, li, div, h1, h2, h3, h4').forEach(block => {
-          block.after('\n');
-        });
-        const rawText = clone.textContent.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
-        if (rawText.length > 30) {
-          // Limitar a máximo 8000 caracteres para no saturar storage
-          jobDescription = rawText.slice(0, 8000);
-          break;
-        }
-      }
-    }
+    // 4. Descripción ("Acerca del empleo" / "About the job")
+    let jobDescription = extractJobDescriptionFromDOM();
 
     return {
       jobId: jobId || String(Date.now()),
@@ -333,6 +308,73 @@
       jobDescription,
       jobUrl: jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : window.location.href.split('?')[0]
     };
+  }
+
+  // ── Extrae el texto de la descripción con múltiples estrategias ────────────
+  function extractJobDescriptionFromDOM() {
+    // Lista amplia de selectores conocidos de LinkedIn
+    const descCandidates = [
+      document.querySelector('#job-details'),
+      document.querySelector('.jobs-description-content__text'),
+      document.querySelector('.jobs-box__html-content'),
+      document.querySelector('.jobs-description__content'),
+      document.querySelector('.jobs-description'),
+      document.querySelector('article.jobs-description__container'),
+      document.querySelector('[data-job-details]'),
+      document.querySelector('[class*="jobs-description"]'),
+      document.querySelector('[class*="job-details-about-the-job"]')
+    ];
+
+    for (const el of descCandidates) {
+      if (!el) continue;
+      const text = cleanDescriptionText(el);
+      if (text && text.length > 40) {
+        return text;
+      }
+    }
+
+    // Búsqueda por encabezado ("Acerca del empleo" / "About the job")
+    const headings = document.querySelectorAll('h2, h3, h4');
+    for (const h of headings) {
+      const lower = h.textContent.trim().toLowerCase();
+      if (lower.includes('acerca del empleo') || lower.includes('about the job') || lower.includes('sobre el empleo')) {
+        let parent = h.parentElement;
+        for (let i = 0; i < 4; i++) {
+          if (!parent) break;
+          const text = cleanDescriptionText(parent);
+          if (text && text.length > 80) {
+            return text;
+          }
+          parent = parent.parentElement;
+        }
+      }
+    }
+
+    return '';
+  }
+
+  function cleanDescriptionText(element) {
+    if (!element) return '';
+    try {
+      const clone = element.cloneNode(true);
+      // Eliminar elementos no textuales o botones de interacción
+      clone.querySelectorAll('button, svg, [role="button"], [aria-hidden="true"], script, style').forEach(e => e.remove());
+
+      // Reemplazar saltos y listas para preservar párrafos
+      clone.querySelectorAll('p, br, li, div, h1, h2, h3, h4').forEach(block => {
+        block.after('\n');
+      });
+
+      const raw = clone.textContent
+        .replace(/\r/g, '')
+        .replace(/\t/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+      return raw.slice(0, 9000);
+    } catch (e) {
+      return '';
+    }
   }
 
   // ── Toast flotante en pantalla ─────────────────────────────────────────────
@@ -439,6 +481,30 @@
       } else {
         console.log('[RecruiterFinder] La oferta ya estaba guardada previamente');
       }
+
+      // Si por la carga asíncrona no se capturó la descripción todavía,
+      // la intentamos reintentar en segundo plano a los 1.5s y 3.5s
+      if (!fullPayload.jobDescription) {
+        retryCaptureDescription(uniqueKey);
+      }
+    });
+  }
+
+  // ── Reintento asíncrono para capturar descripción diferida ──────────────────
+  function retryCaptureDescription(jobId) {
+    const delays = [1500, 3500];
+    delays.forEach(delay => {
+      setTimeout(() => {
+        const desc = extractJobDescriptionFromDOM();
+        if (desc && desc.length > 40) {
+          console.log('[RecruiterFinder] Descripción capturada en reintento asíncrono');
+          chrome.runtime.sendMessage({
+            type: 'UPDATE_JOB_DESCRIPTION',
+            jobId: jobId,
+            jobDescription: desc
+          });
+        }
+      }, delay);
     });
   }
 

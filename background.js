@@ -43,6 +43,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'UPDATE_JOB_DESCRIPTION') {
+    (async () => {
+      const { jobs = [] } = await chrome.storage.local.get('jobs');
+      let changed = false;
+      const updated = jobs.map(j => {
+        if (j.jobId === message.jobId && !j.jobDescription && message.jobDescription) {
+          changed = true;
+          return { ...j, jobDescription: message.jobDescription };
+        }
+        return j;
+      });
+      if (changed) {
+        await chrome.storage.local.set({ jobs: updated });
+      }
+      sendResponse({ success: true, updated: changed });
+    })();
+    return true;
+  }
+
   if (message.type === 'CLEAR_ALL') {
     (async () => {
       await chrome.storage.local.set({ jobs: [] });
