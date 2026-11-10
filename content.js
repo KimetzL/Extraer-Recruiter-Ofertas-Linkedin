@@ -549,26 +549,28 @@
       // Scroll suave hacia la tarjeta
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // Localizar el enlace de la tarjeta
-      const targetLink = targetCard.tagName === 'A' ? targetCard : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+      // Extraer el Job ID de la tarjeta / enlace
+      const href = targetCard.href || targetCard.getAttribute('href') || '';
+      const match = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
+      const targetJobId = match ? match[1] : null;
 
-      if (targetLink) {
-        // 1. Evitar navegación completa o apertura en nueva pestaña si tuviera target="_blank"
-        if (targetLink.hasAttribute('target')) {
-          targetLink.removeAttribute('target');
+      // Intentar hacer click en el CONTENEDOR <li> o tarjeta padre (así selecciona LinkedIn normalmente sin navegar)
+      const parentCard = targetCard.closest('li') || targetCard.parentElement;
+
+      // Disparar click en el contenedor
+      if (parentCard) {
+        parentCard.click();
+      }
+      
+      // Si la URL tiene parámetro currentJobId en LinkedIn, actualizar el estado SPA directamente
+      if (targetJobId) {
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
+          currentUrl.searchParams.set('currentJobId', targetJobId);
+          window.history.pushState({}, '', currentUrl.toString());
+          // Disparar evento popstate/locationchange para que el router de LinkedIn cargue el panel derecho
+          window.dispatchEvent(new PopStateEvent('popstate'));
         }
-
-        // 2. Foco y disparo de un MouseEvent real nativo compatible con el router de LinkedIn (Ember/React)
-        targetLink.focus();
-        const mouseEvent = new MouseEvent('click', {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          buttons: 1
-        });
-        targetLink.dispatchEvent(mouseEvent);
-      } else {
-        targetCard.click();
       }
 
       // Cerrar posibles modales espontáneos que LinkedIn abra
