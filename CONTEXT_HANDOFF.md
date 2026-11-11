@@ -75,18 +75,24 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
 
 ---
 
-## 🛠️ 6. Tareas Pendientes para el Próximo Chat
+## 🛠️ 6. Estado de Tareas y Aprendizajes Recientes
 
-1. **Evitar que avance "de 2 en 2":**
-   - Actualmente `getLeftPanelJobCards()` a veces toma dos nodos de la misma tarjeta (por ejemplo, el contenedor exterior y el título interno, ambos con `role="button"` o texto similar).
-   - *Solución:* Asegurarse de que si un elemento ya está dentro de otro elemento candidato (`parent.contains(child)`), solo se conserve el contenedor de tarjeta más externo.
+1. ✅ **Excluir botones de filtro ("Fecha de Publicación") y cabeceras:**
+   - *Causa raíz:* `[role="button"]` a nivel de documento capturaba los botones de filtro de la barra superior ("Fecha de publicación"), abriendo el desplegable "Últimas 24h...".
+   - *Solución:* Búsqueda acotada a `getJobListContainer()`, exclusión explícita con `isFilterOrHeaderElement` y filtro de altura física (`rect.height >= 50px`, ya que los botones de filtro miden 28-36px).
 
-2. **Suavizar el arranque inicial ("hace algo raro al principio"):**
-   - Al darle a ▶ Auto-Pilot, el primer paso a veces intenta hacer scroll o centrar la tarjeta que ya está activa.
-   - *Solución:* Verificar si la oferta actual ya está seleccionada y marcarla directamente para pasar de inmediato a la siguiente con un retardo natural.
+2. ✅ **Evitar saltos ("se salta una, dos, va más abajo de la 5"):**
+   - *Causa raíz:*
+     1. Múltiples tarjetas patrocinadas tenían `firstLine` = `"Promocionado"`, por lo que el `Set` deduplicador descartaba todas las siguientes ofertas patrocinadas pensando que eran la misma oferta repetida.
+     2. Los términos `'verificado'` y `'fácil'` estaban en la lista negra `isUiButton`, lo que descartaba tarjetas que tuvieran insignias de verificación o "Fácil solicitud".
+     3. Había elementos anidados (ej. contenedor e hijo) que rompían la secuencia.
+   - *Solución:* Extracción semántica de títulos saltando insignias (`isBadgeText`), deduplicación por Job ID numérico real (desde `data-job-id`, `data-occludable-job-id`, `data-entity-urn` o URN embebido), des-anidamiento con `parent.contains(child)`, y ordenación estricta por `rect.top` ascendente para empezar siempre por la primera oferta superior.
 
-3. **Paginación automática a la siguiente página:**
-   - Cuando se llega al final de los resultados de la página 1, `findNextPageButton()` debe localizar el botón de página 2 o "Siguiente" en la paginación inferior de LinkedIn y hacer click, esperando ~3.5s antes de reanudar el escaneo.
+3. ✅ **Arranque suave y centrado inicial:**
+   - En `AUTOPILOT_RESET` se devuelve `scrollTop` a 0 del contenedor si estaba desplazado, y se usa `scrollIntoView({ block: 'nearest' })` para no provocar saltos bruscos si la primera tarjeta ya está visible.
+
+4. 🟡 **Paginación automática a la siguiente página (Siguiente paso):**
+   - Cuando se agotan los resultados de la página actual, asegurar que `findNextPageButton()` clicke en el botón de página siguiente ("Siguiente", flecha o número de página) y reanude la lista tras la carga diferida.
 
 ---
 
@@ -98,3 +104,4 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
   - `0974993`: fix(autopilot): manejo de lista virtual - CLICK_NEXT con scroll
   - `4d5af33`: fix(autopilot): click en li contenedor en vez de `<a>`
   - `d043048`: feat(detail-modal): modal de detalle y boton copiar todo
+

@@ -534,8 +534,10 @@
           stopAutopilot('No se encontraron ofertas. Asegúrate de estar en linkedin.com/jobs/search/');
           return;
         }
-        autopilotStatusText.textContent = `Iniciando escaneo...`;
-        runAutopilotStep();
+        autopilotStatusText.textContent = `Iniciando escaneo... (${response.count} ofertas detectadas)`;
+        setTimeout(() => {
+          if (isAutopilotRunning) runAutopilotStep();
+        }, 300);
       });
     });
   }
@@ -604,7 +606,8 @@
       const pct = Math.min(100, Math.round((autopilotTotalScanned / autopilotMaxToScan) * 100));
       autopilotProgressFill.style.width = `${pct}%`;
       autopilotCounter.textContent = `${autopilotTotalScanned} / ${autopilotMaxToScan}`;
-      autopilotStatusText.textContent = `Oferta ${autopilotTotalScanned} analizada${response.jobId ? ` (ID: ${response.jobId})` : ''}...`;
+      const titleLabel = response.title ? `"${response.title.slice(0, 26)}"` : (response.jobId ? `ID: ${response.jobId}` : '');
+      autopilotStatusText.textContent = `Oferta ${autopilotTotalScanned} analizada${titleLabel ? ` (${titleLabel})` : ''}...`;
 
       // Esperar el tiempo configurado antes de pasar a la siguiente
       const baseDelay = parseInt(autopilotDelaySelect.value, 10) || 2000;

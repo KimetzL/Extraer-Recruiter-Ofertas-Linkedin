@@ -531,9 +531,14 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    // Resetear tarjetas procesadas al iniciar nueva sesión
+    // Resetear tarjetas procesadas al iniciar nueva sesión y volver arriba
     if (message.type === 'AUTOPILOT_RESET') {
       autopilotProcessedKeys.clear();
+      document.querySelectorAll('[data-autopilot-processed]').forEach(el => el.removeAttribute('data-autopilot-processed'));
+      const container = getJobListContainer();
+      if (container && container.scrollTop > 0) {
+        container.scrollTop = 0;
+      }
       sendResponse({ success: true });
       return false;
     }
@@ -552,7 +557,7 @@
     if (message.type === 'AUTOPILOT_CLICK_NEXT') {
       const cards = getLeftPanelJobCards();
 
-      // Buscar la primera tarjeta de empleo no procesada aún
+      // Buscar la primera tarjeta de empleo no procesada aún (ordenadas de arriba a abajo)
       const targetCard = cards.find(c => !autopilotProcessedKeys.has(c.key));
 
       if (!targetCard) {
@@ -564,29 +569,22 @@
 
       // Marcar como procesada
       autopilotProcessedKeys.add(targetCard.key);
+      try {
+        targetCard.element.setAttribute('data-autopilot-processed', 'true');
+      } catch (_) {}
 
-      // Centrar el elemento visiblemente
-      targetCard.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-      // Click seguro: si es enlace <a>, prevenir navegación tradicional fuera de la búsqueda
-      if (targetCard.element.tagName === 'A' || targetCard.element.closest('a')) {
-        const blockNav = (e) => {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        };
-        document.addEventListener('click', blockNav, { capture: true, once: true });
-      }
-
-      // Disparar click en el elemento o su contenedor
-      targetCard.element.focus();
-      targetCard.element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
-      targetCard.element.dispatchEvent(new MouseEvent('mouseup',  { bubbles: true, cancelable: true, buttons: 1, view: window }));
-      targetCard.element.dispatchEvent(new MouseEvent('click',    { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      // Click seguro y efectivo
+      clickJobCard(targetCard.element);
 
       // Cerrar posibles modales espontáneos
       dismissAnyModalDialog();
 
-      sendResponse({ success: true, jobId: targetCard.jobId || targetCard.title, scrolled: false });
+      sendResponse({
+        success: true,
+        jobId: targetCard.jobId || null,
+        title: targetCard.title,
+        scrolled: false
+      });
       return false;
     }
 
@@ -604,44 +602,232 @@
     }
   });
 
+  // ── Palabras clave de insignias y estados que NO son el título de la oferta ─
+  const BADGE_KEYWORDS = [
+    'promocionado', 'promoted',
+    'con verificación', 'verificado', 'verified',
+    'activamente contratando', 'actively hiring',
+    'visto', 'viewed',
+    'fácil solicitud', 'solicitud sencilla', 'easy apply',
+    'guardar', 'guardado', 'save', 'saved',
+    'descartar', 'dismiss',
+    'compartir', 'share',
+    'cerrar', 'close',
+    'enviar candidatura', 'solicitar', 'solicitado',
+    'con respuesta rápida', 'early applicant', 'sé de los primeros'
+  ];
+
+  function isBadgeText(str) {
+    if (!str) return false;
+    const lower = str.trim().toLowerCase();
+    return BADGE_KEYWORDS.some(b => lower === b || lower.startsWith(b));
+  }
+
+  // ── Comprueba si un elemento es parte de filtros, cabeceras o barras ajenas ─
+  function isFilterOrHeaderElement(el) {
+    if (!el) return true;
+
+    // 1. Ancestros que son barras de filtro, cabeceras o barras de herramientas
+    if (el.closest(
+      'header, nav, [role="toolbar"], ' +
+      '.search-filters-bar, [class*="search-filters"], ' +
+      '.scaffold-layout__filters, [class*="filters-bar"], [class*="filter-bar"], ' +
+      '[data-view-name*="filter"], [aria-label*="filtro" i], [aria-label*="filter" i], ' +
+      '.jobs-search-box, form[role="search"], ' +
+      '.jobs-details__main-content, .job-view-layout, [data-view-name="job-details"]'
+    )) {
+      return true;
+    }
+
+    // 2. Si es un botón o elemento corto, descartar si su texto es un filtro conocido
+    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+    if (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || text.length < 40) {
+      const filterKeywords = [
+        'fecha de publicación', 'date posted', 'últimas 24', 'última semana', 'último mes',
+        'cualquier momento', 'past 24 hours', 'past week', 'past month',
+        'tipo de empleo', 'job type', 'jornada', 'tiempo completo', 'media jornada',
+        'nivel de experiencia', 'experience level', 'en remoto', 'presencial', 'híbrido',
+        'todos los filtros', 'all filters', 'filtros', 'filters',
+        'crear alerta', 'alerta de empleo', 'crear una alerta', 'set alert',
+        'ordenar por', 'sort by', 'más recientes', 'más pertinentes',
+        'activar premium', 'premium', 'mostrar más', 'siguiente', 'anterior'
+      ];
+      for (const kw of filterKeywords) {
+        if (text === kw || text.startsWith(kw)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   // ── Extrae el Job ID numérico desde un elemento ───────────────────────────
   function extractJobIdFromElement(el) {
     if (!el) return null;
-    const href = el.href || el.getAttribute('href') || '';
-    const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
-    if (m) return m[1];
 
-    const parentWithId = el.closest('[data-job-id], [data-occludable-job-id]');
-    if (parentWithId) {
-      return parentWithId.getAttribute('data-job-id') || parentWithId.getAttribute('data-occludable-job-id');
+    // 1. Atributo directo o en ancestro/hijo cercano
+    const idAttrs = ['data-job-id', 'data-occludable-job-id', 'data-job-posting-id'];
+    for (const attr of idAttrs) {
+      const val = el.getAttribute?.(attr) || el.closest?.(`[${attr}]`)?.getAttribute(attr);
+      if (val && /^\d+$/.test(val)) return val;
+      const child = el.querySelector?.(`[${attr}]`);
+      if (child) {
+        const childVal = child.getAttribute(attr);
+        if (childVal && /^\d+$/.test(childVal)) return childVal;
+      }
     }
+
+    // 2. data-entity-urn o data-chameleon-result-urn (urn:li:jobPosting:123456789)
+    const urnSources = [
+      el.getAttribute?.('data-entity-urn'),
+      el.closest?.('[data-entity-urn]')?.getAttribute('data-entity-urn'),
+      el.querySelector?.('[data-entity-urn]')?.getAttribute('data-entity-urn'),
+      el.getAttribute?.('data-chameleon-result-urn'),
+      el.querySelector?.('[data-chameleon-result-urn]')?.getAttribute('data-chameleon-result-urn')
+    ];
+    for (const u of urnSources) {
+      if (u) {
+        const m = u.match(/jobPosting:(\d+)/);
+        if (m && m[1]) return m[1];
+      }
+    }
+
+    // 3. Enlaces href a /jobs/view/XXXX o ?currentJobId=XXXX
+    const links = el.tagName === 'A'
+      ? [el]
+      : Array.from(el.querySelectorAll?.('a[href*="/jobs/view/"], a[href*="currentJobId="]') || []);
+    for (const a of links) {
+      const href = a.href || a.getAttribute('href') || '';
+      const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
+      if (m && m[1]) return m[1];
+    }
+
+    // 4. Búsqueda en el HTML interno por URN numérico
+    if (el.innerHTML) {
+      const m = el.innerHTML.match(/(?:jobPosting|fsd_jobPosting)(?:%3A|:)(\d{8,12})/);
+      if (m && m[1]) return m[1];
+    }
+
+    return null;
+  }
+
+  // ── Extrae el título real de la oferta ignorando badges ────────────────────
+  function extractJobTitleFromCard(el) {
+    if (!el) return 'Oferta de empleo';
+
+    // 1. Selectores semánticos de título dentro de la tarjeta
+    const titleSelectors = [
+      '.job-card-list__title',
+      '.job-card-container__link',
+      'a[href*="/jobs/view/"]',
+      'strong',
+      'h3',
+      'h4',
+      '[class*="title"]:not([class*="subtitle"]):not([class*="company"])'
+    ];
+
+    for (const sel of titleSelectors) {
+      const candidate = el.querySelector(sel);
+      if (candidate) {
+        const txt = candidate.textContent.trim();
+        if (txt.length >= 3 && !isBadgeText(txt)) {
+          return txt;
+        }
+      }
+    }
+
+    // 2. Parsear líneas de texto ignorando insignias / badges iniciales
+    const lines = (el.innerText || el.textContent || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    for (const line of lines) {
+      if (!isBadgeText(line) && line.length >= 3 && line.length <= 120) {
+        return line;
+      }
+    }
+
+    return 'Oferta de empleo';
+  }
+
+  // ── Encuentra el contenedor principal de la lista de ofertas ───────────────
+  function getJobListContainer() {
+    const listSelectors = [
+      '.jobs-search-results-list',
+      '[class*="jobs-search-results-list"]',
+      '.scaffold-layout__list:not([class*="filters"])',
+      '[class*="scaffold-layout__list"]:not([class*="filters"])',
+      'div[data-view-name="job-search-results-list"]',
+      'ul.scaffold-layout__list-container',
+      '.jobs-search-results__list'
+    ];
+
+    for (const sel of listSelectors) {
+      const el = document.querySelector(sel);
+      if (el && !el.closest('.jobs-details__main-content') && !el.closest('.job-view-layout')) {
+        return el;
+      }
+    }
+
+    // Si no se encuentra por selector directo, usar el contenedor con scroll activo de la izquierda
+    const scrollContainers = findActualScrollContainers();
+    if (scrollContainers.length > 0) {
+      return scrollContainers[0];
+    }
+
     return null;
   }
 
   // ── Encuentra todas las tarjetas de empleo en el panel IZQUIERDO ──────────
-  // En LinkedIn moderno, las tarjetas pueden ser <div role="button"> o <a>
   function getLeftPanelJobCards() {
-    const rawCandidates = Array.from(document.querySelectorAll(
-      'a[href*="/jobs/view/"], [role="button"], li.jobs-search-results__list-item, [data-occludable-job-id]'
+    const listContainer = getJobListContainer();
+    const searchRoot = listContainer || document;
+
+    // Buscar candidatos de tarjeta dentro del contenedor de la lista
+    // 1. Prioridad: elementos <li> de la lista de búsqueda
+    let rawElements = Array.from(searchRoot.querySelectorAll(
+      'li.jobs-search-results__list-item, ' +
+      'li.scaffold-layout__list-item, ' +
+      'li[data-occludable-job-id], ' +
+      '.scaffold-layout__list-container > li, ' +
+      '[data-view-name="job-card"]'
     ));
 
+    // Si listContainer es un <ul> o tiene <ul> y no coincidieron las clases anteriores
+    if (rawElements.length === 0 && listContainer) {
+      rawElements = Array.from(listContainer.querySelectorAll('ul > li'));
+    }
+
+    // 2. Si no hay <li>, buscar contenedores directos de tarjeta
+    if (rawElements.length === 0) {
+      rawElements = Array.from(searchRoot.querySelectorAll(
+        '[data-job-id], [data-occludable-job-id], .job-card-container, div[class*="job-card"]'
+      ));
+    }
+
+    // 3. Si aún no hay nada (fallback), buscar divs con role="button" o <a> en el contenedor
+    if (rawElements.length === 0) {
+      rawElements = Array.from(searchRoot.querySelectorAll(
+        '[role="button"], a[href*="/jobs/view/"]'
+      ));
+    }
+
+    // Filtrar elementos anidados: si un candidato está contenido dentro de otro candidato,
+    // conservar solo el contenedor exterior más representativo
+    const outerElements = rawElements.filter(el => {
+      return !rawElements.some(other => other !== el && other.contains(el));
+    });
+
     const validCards = [];
-    const seenTitles = new Set();
+    const seenKeys = new Set();
 
-    for (const el of rawCandidates) {
-      // 1. Debe estar en la mitad izquierda de la pantalla
-      const rect = el.getBoundingClientRect();
-      if (rect.left > window.innerWidth * 0.52 || rect.width < 120) continue;
-      if (rect.height < 24 || rect.height > 250) continue;
-      if (rect.top < 60) continue; // Debajo del encabezado
+    for (const el of outerElements) {
+      // Excluir filtros, cabeceras y paneles ajenos
+      if (isFilterOrHeaderElement(el)) continue;
 
-      // 2. Excluir panel derecho de detalle
-      if (el.closest('.jobs-details__main-content')) continue;
-      if (el.closest('.job-view-layout')) continue;
-      if (el.closest('[data-view-name="job-details"]')) continue;
-      if (el.closest('header')) continue;
-
-      // 3. Excluir enlaces ajenos
+      // Excluir enlaces ajenos
       if (el.href) {
         if (el.href.includes('/company/')) continue;
         if (el.href.includes('premium')) continue;
@@ -649,38 +835,99 @@
         if (el.href.includes('/in/')) continue;
       }
 
-      // 4. Obtener el texto del título
-      const text = (el.innerText || '').trim();
-      const firstLine = text.split('\n')[0].trim();
-      const lower = firstLine.toLowerCase();
+      // Dimensiones físicas de una tarjeta de empleo real:
+      const rect = el.getBoundingClientRect();
+      if (rect.left > window.innerWidth * 0.55 || rect.width < 140) continue;
+      // Una tarjeta en LinkedIn mide al menos 50px de alto (los botones de filtro miden 28-36px)
+      if (rect.height < 50 || rect.height > 400) continue;
 
-      // Excluir botones de la interfaz
-      const isUiButton = [
-        'activar premium', 'premium', 'guardar', 'guardado', 'descartar',
-        'compartir', 'enviar', 'solicitar', 'filtros', 'todos los filtros',
-        'fácil', 'alerta', 'mostrar más', 'siguiente', 'anterior', 'cerrar',
-        'verificado', 'opinión', 'enviar candidatura'
-      ].some(ui => lower.includes(ui));
-      if (isUiButton) continue;
-
-      if (firstLine.length < 3 || firstLine.length > 120) continue;
-
-      // Deduplicar por título normalizado
-      const normKey = lower.replace(/[^a-z0-9]/g, '').slice(0, 30);
-      if (!normKey || seenTitles.has(normKey)) continue;
-      seenTitles.add(normKey);
-
+      // Obtener Job ID y Título real
       const jobId = extractJobIdFromElement(el);
+      const title = extractJobTitleFromCard(el);
+
+      // Si el título parece ser un badge o botón auxiliar, ignorar
+      if (isBadgeText(title)) continue;
+
+      // Clave única para deduplicación: preferir jobId numérico; fallback a título normalizado
+      const normTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+      const uniqueKey = jobId ? `id_${jobId}` : `title_${normTitle}`;
+
+      if (seenKeys.has(uniqueKey)) continue;
+      seenKeys.add(uniqueKey);
 
       validCards.push({
         element: el,
-        key: jobId || normKey,
-        title: firstLine,
-        jobId: jobId
+        key: uniqueKey,
+        jobId: jobId,
+        title: title,
+        rect: rect
       });
     }
 
+    // ORDENAR ESTRICTAMENTE DE ARRIBA A ABAJO POR POSICIÓN VERTICAL
+    // Esto garantiza que siempre se procesa primero la tarjeta superior (la 1ª oferta)
+    validCards.sort((a, b) => a.rect.top - b.rect.top);
+
     return validCards;
+  }
+
+  // ── Localiza el mejor elemento clickeable dentro de la tarjeta ─────────────
+  function findClickableInCard(cardEl) {
+    if (!cardEl) return cardEl;
+
+    // 1. Contenedor de tarjeta clickeable interno con role="button" (común en LinkedIn 2025/2026)
+    const roleButton = cardEl.querySelector(
+      '.job-card-container, div[role="button"]:not([aria-label*="Guardar"]):not([aria-label*="Descartar"]):not([aria-label*="Save"]):not([aria-label*="Dismiss"])'
+    );
+    if (roleButton) return roleButton;
+
+    // 2. Si cardEl mismo tiene role="button" y no es botón auxiliar
+    if (cardEl.getAttribute?.('role') === 'button' && !isAuxiliaryButton(cardEl)) {
+      return cardEl;
+    }
+
+    // 3. Enlace con título del empleo
+    const titleLink = cardEl.querySelector('.job-card-list__title, .job-card-container__link, a[href*="/jobs/view/"]');
+    if (titleLink) return titleLink;
+
+    // 4. El propio elemento de la tarjeta
+    return cardEl;
+  }
+
+  function isAuxiliaryButton(el) {
+    if (!el) return false;
+    const label = (el.getAttribute?.('aria-label') || '').toLowerCase();
+    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+    const auxWords = ['guardar', 'save', 'descartar', 'dismiss', 'compartir', 'share', 'cerrar', 'close'];
+    return auxWords.some(w => label.includes(w) || (txt.length < 20 && txt.includes(w)));
+  }
+
+  // ── Ejecuta el click simulando interacción de usuario en la tarjeta ────────
+  function clickJobCard(cardEl) {
+    const clickable = findClickableInCard(cardEl);
+
+    // Scroll suave solo si el elemento no está ya en el viewport
+    cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Si clickable es una etiqueta <a>, interceptar navegación para evitar full-page reload
+    if (clickable.tagName === 'A' || clickable.closest('a')) {
+      const blockNav = (e) => {
+        e.preventDefault();
+      };
+      clickable.addEventListener('click', blockNav, { capture: true, once: true });
+    }
+
+    clickable.focus?.();
+    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+    clickable.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, buttons: 1, view: window }));
+    clickable.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, buttons: 1, view: window }));
+
+    // Si clickable es un elemento interno, disparar también en el contenedor
+    if (clickable !== cardEl) {
+      cardEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      cardEl.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      cardEl.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, buttons: 1, view: window }));
+    }
   }
 
   // ── Realiza scroll moderado SOLO en la lista de ofertas (NUNCA en window) ──
@@ -692,8 +939,8 @@
 
     for (const container of scrollContainers) {
       const prevTop = container.scrollTop;
-      // Scroll moderado (220px = ~2 tarjetas) para no saltarse ofertas
-      container.scrollTop += 220;
+      // Scroll moderado (180px) para que las ofertas no se pasen de largo en listas virtuales
+      container.scrollTop += 180;
       if (container.scrollTop !== prevTop) {
         scrolled = true;
       }
@@ -701,7 +948,7 @@
       // Disparar eventos de scroll y rueda para activar la virtualización
       container.dispatchEvent(new Event('scroll', { bubbles: true }));
       container.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: 250,
+        deltaY: 200,
         bubbles: true,
         cancelable: true
       }));
@@ -714,11 +961,23 @@
   function findActualScrollContainers() {
     const containers = new Set();
 
-    // Buscar contenedores scrollables en la mitad izquierda
+    // 1. Si existe un contenedor conocido de ofertas, comprobarlo primero
+    const knownList = document.querySelector(
+      '.jobs-search-results-list, [class*="jobs-search-results-list"], .scaffold-layout__list:not([class*="filters"])'
+    );
+    if (knownList && isElementScrollable(knownList)) {
+      containers.add(knownList);
+      return Array.from(containers);
+    }
+
+    // 2. Buscar contenedores scrollables en la mitad izquierda
     const candidates = document.querySelectorAll('div, ul, main, section, aside');
     for (const el of candidates) {
+      if (el.closest('.jobs-details__main-content') || el.closest('.job-view-layout') || el.closest('header')) {
+        continue;
+      }
       const rect = el.getBoundingClientRect();
-      if (rect.left < window.innerWidth * 0.52 && rect.width > 200 && rect.height > 200) {
+      if (rect.left < window.innerWidth * 0.55 && rect.width > 200 && rect.height > 200) {
         if (isElementScrollable(el)) {
           containers.add(el);
         }
