@@ -521,6 +521,25 @@ html, body {
   text-overflow: ellipsis;
 }
 
+.job-salary {
+  font-size: 11px;
+  font-weight: 600;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  border-radius: 4px;
+  padding: 1px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  width: fit-content;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Card actions */
 .card-actions {
   display: flex;
@@ -944,6 +963,16 @@ dialog.detail-modal::backdrop {
 .detail-value.font-highlight {
   font-weight: 600;
   color: #fff;
+}
+
+.detail-value.salary-badge {
+  font-weight: 600;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 4px;
+  padding: 1px 7px;
+  display: inline-block;
 }
 
 .detail-value.text-muted {

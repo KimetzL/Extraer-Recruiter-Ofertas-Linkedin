@@ -30,6 +30,7 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
 | **Detección de Recruiters** | ✅ 100% Funcionando | 4 niveles de prioridad, extrae enlace de mensaje directo, avatar y perfil. |
 | **Filtro Anti Falsos Positivos** | ✅ 100% Funcionando | Descarta secciones de alumni o "miembros de tu red" que no son recruiters reales. |
 | **Captura de Descripción** | ✅ 100% Funcionando | Extrae "Acerca del empleo" con reintentos asíncronos (1.5s y 3.5s) para cargas diferidas. |
+| **Extracción de Sueldo** | ✅ 100% Funcionando | Motor dual: Top Card (`72,3K USD/yr - 75K USD/yr`) o Descripción con normalización Unicode (`Up to $115,000 base`, `Salary Range: $72,304 to $75,000`). Visible en modal Info, tarjeta, Copiar y CSV. |
 | **Side Panel UI** | ✅ 100% Funcionando | Contadores en vivo, buscador instantáneo, exportar CSV limpio con BOM UTF-8. |
 | **Modal Detalle + Copiar** | ✅ 100% Funcionando | Dialog nativo `<dialog>`, muestra todo formateado y botón "Copiar todo" verde. |
 | **Modales de Confirmación** | ✅ 100% Funcionando | Tanto para borrado individual como para "Borrar todo", evita pérdidas de datos. |

@@ -299,15 +299,89 @@
     // 4. Descripción ("Acerca del empleo" / "About the job")
     let jobDescription = extractJobDescriptionFromDOM();
 
+    // 5. Sueldo / Salario (Cabecera superior o Descripción)
+    let salary = extractSalary(jobDescription);
+
     return {
       jobId: jobId || String(Date.now()),
       jobTitle,
       company,
       companyUrl,
       location,
+      salary,
       jobDescription,
       jobUrl: jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : window.location.href.split('?')[0]
     };
+  }
+
+  // ── Extrae el sueldo de la oferta (Cabecera superior o Descripción) ────────
+  function extractSalary(jobDescription) {
+    // PRIORIDAD 1: Cabecera superior (Top Card de LinkedIn)
+    const topCardSalaryCandidates = [
+      ...document.querySelectorAll('.job-details-jobs-unified-top-card__job-insight'),
+      ...document.querySelectorAll('.job-details-jobs-unified-top-card__primary-description-container span'),
+      ...document.querySelectorAll('[class*="job-insight"]'),
+      ...document.querySelectorAll('[class*="salary"]'),
+      ...document.querySelectorAll('[class*="compensation"]')
+    ];
+
+    for (const el of topCardSalaryCandidates) {
+      const text = el.textContent.trim();
+      // Excluir elementos que sean claramente de fecha o solicitudes
+      if (text.includes('hace ') || text.includes('solicitud') || text.includes('applicant')) continue;
+      const sal = extractSalaryFromText(text);
+      if (sal) {
+        return sal;
+      }
+    }
+
+    // PRIORIDAD 2: Cuerpo de la descripción ("Acerca del empleo" / "About the job")
+    if (jobDescription) {
+      const sal = extractSalaryFromText(jobDescription);
+      if (sal) {
+        return sal;
+      }
+    }
+
+    return null;
+  }
+
+  // ── Analiza cualquier bloque de texto para extraer un salario válido ───────
+  function extractSalaryFromText(text) {
+    if (!text) return null;
+    // Normalizar Unicode (convierte negritas matemáticas como 𝗪𝗵𝗮𝘁’𝘀 a What's)
+    const normalized = text.normalize('NFKD');
+
+    // 1. Patrón con prefijo explícito (Salary Range:, Base salary:, Compensation:, etc.)
+    const prefixRegex = /(?:salary\s*range|base\s*salary|annual\s*salary|target\s*salary|salary|compensation\s*range|compensation|pay\s*range|base\s*pay|pay|hourly\s*rate|rango\s*salarial|sueldo|salario|retribuci[oó]n|remuneraci[oó]n)\s*[:\-–—]?\s*([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|mo|año|hora))?\s*(?:to|-|–|—|a)\s*[$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*(?:brutos|gross|neto|net))?(?:\s*(?:\/|\s*per\s*|\s*al\s*|\s*por\s*|\s*a\s*)(?:yr|year|año|annum|hr|hour|hora|mo|month|mes))?)/i;
+    const m1 = normalized.match(prefixRegex);
+    if (m1 && m1[1]) {
+      return cleanSalaryString(m1[1]);
+    }
+
+    // 2. Patrón 'Up to $X' o 'Starting at $X'
+    const upToRegex = /(?:up\s*to|starting\s*at|starting\s*from|hasta|desde)\s+([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€)?(?:\s*(?:base(?:\s*salary)?|annually|per\s*year|\/yr|\/year|\/hr|\/hour|gross|brutos))?)/i;
+    const m2 = normalized.match(upToRegex);
+    if (m2 && m2[1]) {
+      const isUpTo = /up\s*to|hasta/i.test(m2[0]);
+      const isStarting = /starting|desde/i.test(m2[0]);
+      const prefix = isUpTo ? 'Up to ' : (isStarting ? 'Starting at ' : '');
+      return cleanSalaryString(prefix + m2[1]);
+    }
+
+    // 3. Patrón de rango general (con símbolo o código de moneda en el rango)
+    const rangeRegex = /([$€£]?\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|mo|año|hora))?\s*(?:-|–|—|to|a)\s*[$€£]?\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|€|[$])?(?:\s*(?:usd|eur|cad|gbp))?(?:\s*(?:brutos|gross))?(?:\s*(?:\/|\s*per\s*|\s*a\s*|\s*al\s*|\s*por\s*)(?:yr|year|año|annum|hr|hour|hora|mo|month|mes))?)/i;
+    const m3 = normalized.match(rangeRegex);
+    if (m3 && m3[1] && (m3[1].includes('$') || m3[1].includes('€') || m3[1].includes('£') || /usd|eur|cad|gbp/i.test(m3[1]))) {
+      return cleanSalaryString(m3[1]);
+    }
+
+    return null;
+  }
+
+  function cleanSalaryString(str) {
+    if (!str) return null;
+    return str.replace(/\s+/g, ' ').replace(/[.,;:\s]+$/, '').trim();
   }
 
   // ── Extrae el texto de la descripción con múltiples estrategias ────────────
@@ -490,18 +564,20 @@
     });
   }
 
-  // ── Reintento asíncrono para capturar descripción diferida ──────────────────
+  // ── Reintento asíncrono para capturar descripción y sueldo diferidos ───────
   function retryCaptureDescription(jobId) {
     const delays = [1500, 3500];
     delays.forEach(delay => {
       setTimeout(() => {
         const desc = extractJobDescriptionFromDOM();
         if (desc && desc.length > 40) {
-          console.log('[RecruiterFinder] Descripción capturada en reintento asíncrono');
+          const salary = extractSalary(desc);
+          console.log('[RecruiterFinder] Descripción y/o sueldo capturados en reintento asíncrono');
           chrome.runtime.sendMessage({
             type: 'UPDATE_JOB_DESCRIPTION',
             jobId: jobId,
-            jobDescription: desc
+            jobDescription: desc,
+            salary: salary
           });
         }
       }, delay);

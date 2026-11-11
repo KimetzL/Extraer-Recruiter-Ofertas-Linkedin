@@ -48,9 +48,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const { jobs = [] } = await chrome.storage.local.get('jobs');
       let changed = false;
       const updated = jobs.map(j => {
-        if (j.jobId === message.jobId && !j.jobDescription && message.jobDescription) {
-          changed = true;
-          return { ...j, jobDescription: message.jobDescription };
+        if (j.jobId === message.jobId) {
+          let modified = false;
+          const updatedJob = { ...j };
+          if (!updatedJob.jobDescription && message.jobDescription) {
+            updatedJob.jobDescription = message.jobDescription;
+            modified = true;
+          }
+          if (!updatedJob.salary && message.salary) {
+            updatedJob.salary = message.salary;
+            modified = true;
+          }
+          if (modified) changed = true;
+          return updatedJob;
         }
         return j;
       });

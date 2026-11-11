@@ -32,6 +32,7 @@
   const detailJobTitle = document.getElementById('detail-job-title');
   const detailCompany = document.getElementById('detail-company');
   const detailLocation = document.getElementById('detail-location');
+  const detailSalary = document.getElementById('detail-salary');
   const detailRecruiterName = document.getElementById('detail-recruiter-name');
   const detailRecruiterTitle = document.getElementById('detail-recruiter-title');
   const detailRecruiterUrl = document.getElementById('detail-recruiter-url');
@@ -178,6 +179,7 @@
       }
           </div>
           ${job.location ? `<div class="job-location">📍 <span>${escapeHtml(job.location)}</span></div>` : ''}
+          ${job.salary ? `<div class="job-salary">💰 <span>${escapeHtml(job.salary)}</span></div>` : ''}
         </div>
 
         <div class="card-actions">
@@ -274,7 +276,7 @@
       return;
     }
 
-    const headers = ['Recruiter', 'Título del Recruiter', 'Perfil LinkedIn Recruiter', 'Enlace Mensaje', 'Título del Puesto', 'Empresa', 'Ubicación', 'URL Oferta', 'Fecha Guardado'];
+    const headers = ['Recruiter', 'Título del Recruiter', 'Perfil LinkedIn Recruiter', 'Enlace Mensaje', 'Título del Puesto', 'Empresa', 'Ubicación', 'Sueldo', 'URL Oferta', 'Fecha Guardado'];
     const rows = allJobs.map(j => [
       j.recruiterName || '',
       j.recruiterTitle || '',
@@ -283,6 +285,7 @@
       j.jobTitle || '',
       j.company || '',
       j.location || '',
+      j.salary || '',
       j.jobUrl || '',
       j.savedAt ? new Date(j.savedAt).toLocaleString('es-ES') : ''
     ]);
@@ -396,6 +399,16 @@
     detailCompany.textContent = job.company || 'Empresa no especificada';
     detailLocation.textContent = job.location || 'No especificada';
 
+    if (detailSalary) {
+      if (job.salary) {
+        detailSalary.textContent = job.salary;
+        detailSalary.className = 'detail-value salary-badge';
+      } else {
+        detailSalary.textContent = 'No especificado en la oferta';
+        detailSalary.className = 'detail-value text-muted';
+      }
+    }
+
     detailRecruiterName.textContent = job.recruiterName || 'Recruiter de la oferta';
     detailRecruiterTitle.textContent = job.recruiterTitle || 'Equipo de contratación';
 
@@ -448,6 +461,7 @@
     const puesto = job.jobTitle || 'Oferta en LinkedIn';
     const empresa = job.company || 'Empresa en LinkedIn';
     const ubicacion = job.location || 'No especificada';
+    const sueldo = job.salary || 'No especificado';
     const recName = job.recruiterName || 'Recruiter';
     const recTitle = job.recruiterTitle ? ` (${job.recruiterTitle})` : '';
     const perfil = job.recruiterProfileUrl || 'No disponible';
@@ -459,6 +473,7 @@
       `Puesto: ${puesto}`,
       `Empresa: ${empresa}`,
       `Ubicación: ${ubicacion}`,
+      `Sueldo: ${sueldo}`,
       `Recruiter: ${recName}${recTitle}`,
       `Perfil: ${perfil}`,
       `Oferta: ${oferta}`,
