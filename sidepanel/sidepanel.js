@@ -86,14 +86,14 @@
   function renderJobs() {
     const filtered = searchQuery
       ? allJobs.filter(j => {
-          const q = searchQuery.toLowerCase();
-          return (
-            j.recruiterName?.toLowerCase().includes(q) ||
-            j.company?.toLowerCase().includes(q) ||
-            j.jobTitle?.toLowerCase().includes(q) ||
-            j.location?.toLowerCase().includes(q)
-          );
-        })
+        const q = searchQuery.toLowerCase();
+        return (
+          j.recruiterName?.toLowerCase().includes(q) ||
+          j.company?.toLowerCase().includes(q) ||
+          j.jobTitle?.toLowerCase().includes(q) ||
+          j.location?.toLowerCase().includes(q)
+        );
+      })
       : allJobs;
 
     if (filtered.length === 0) {
@@ -140,7 +140,7 @@
     const recruiterTitle = job.recruiterTitle && job.recruiterTitle.trim() ? job.recruiterTitle.trim() : 'Equipo de contratación';
     const jobTitle = job.jobTitle && job.jobTitle.trim() ? job.jobTitle.trim() : 'Oferta en LinkedIn';
     const company = job.company && job.company.trim() ? job.company.trim() : 'Empresa en LinkedIn';
-    
+
     // Avatar: imagen real si existe, o iniciales estilizadas
     const avatarHtml = job.recruiterAvatar
       ? `<img class="recruiter-avatar" src="${escapeHtml(job.recruiterAvatar)}" alt="${escapeHtml(recruiterName)}" style="object-fit:cover;" />`
@@ -173,9 +173,9 @@
           <div class="job-title" title="${escapeHtml(jobTitle)}">${escapeHtml(jobTitle)}</div>
           <div class="job-company">
             ${job.companyUrl
-              ? `<a href="${escapeHtml(job.companyUrl)}" target="_blank" style="color:inherit;text-decoration:none">${escapeHtml(company)}</a>`
-              : escapeHtml(company)
-            }
+        ? `<a href="${escapeHtml(job.companyUrl)}" target="_blank" style="color:inherit;text-decoration:none">${escapeHtml(company)}</a>`
+        : escapeHtml(company)
+      }
           </div>
           ${job.location ? `<div class="job-location">📍 <span>${escapeHtml(job.location)}</span></div>` : ''}
         </div>
