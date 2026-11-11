@@ -550,42 +550,48 @@
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
       // 2. Extraer el Job ID de la tarjeta o de sus enlaces internos
-      const linkEl = targetCard.tagName === 'A' ? targetCard : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
-      const href = (linkEl ? (linkEl.href || linkEl.getAttribute('href')) : '') || targetCard.getAttribute('data-occludable-job-id') || '';
-      const match = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/) || href.match(/^(\d+)$/);
-      const targetJobId = match ? match[1] : null;
+      const linkEl = targetCard.tagName === 'A'
+        ? targetCard
+        : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+      const rawHref = (linkEl ? (linkEl.href || linkEl.getAttribute('href')) : '')
+        || targetCard.getAttribute('data-occludable-job-id') || '';
+      const jobIdMatch = rawHref.match(/\/jobs\/view\/(\d+)/)
+        || rawHref.match(/currentJobId=(\d+)/)
+        || rawHref.match(/^(\d+)$/);
+      const targetJobId = jobIdMatch ? jobIdMatch[1] : null;
 
-      // 3. Selección segura sin navegación tradicional:
-      // Si hacemos clic en un enlace <a> con href completo, el navegador abandona la página.
-      // Para evitarlo, capturamos el evento click temporalmente con preventDefault()
-      // mientras permitimos que el router interno de LinkedIn reciba el evento.
-      const safeClickHandler = (e) => {
-        // Evitamos la navegación tradicional por enlace si es un <a>
-        if (e.target.closest('a')) {
+      // 3. ESTRATEGIA PRINCIPAL: Hacer click directamente en el <li> contenedor.
+      //    LinkedIn tiene listeners propios en el <li> que cargan el panel derecho
+      //    SIN navegar fuera de la página de búsqueda.
+      //    Solo bloqueamos navegación si el elemento clickeable es un <a>.
+      if (targetCard.tagName === 'LI' || targetCard.tagName === 'DIV') {
+        // Click en el contenedor: LinkedIn lo intercepta con su router (Ember/Voyager)
+        targetCard.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+        targetCard.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+        targetCard.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      } else if (linkEl) {
+        // Es un <a>: bloqueamos la navegación del navegador pero dejamos que
+        // el JS de LinkedIn maneje el evento via sus propios listeners en ancestros.
+        const blockNavigation = (e) => {
           e.preventDefault();
-        }
-      };
+          e.stopImmediatePropagation();
+        };
+        // Capturamos a nivel de document antes de que el navegador lo procese
+        document.addEventListener('click', blockNavigation, { capture: true, once: true });
+        linkEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      }
 
-      targetCard.addEventListener('click', safeClickHandler, { capture: true, once: true });
-
-      // Disparamos evento de ratón simulando al usuario
-      const clickableElement = linkEl || targetCard;
-      clickableElement.focus();
-      clickableElement.dispatchEvent(new MouseEvent('click', {
-        view: window,
-        bubbles: true,
-        cancelable: true,
-        buttons: 1
-      }));
-
-      // 4. Forzar al panel derecho a mostrar la oferta cambiando el parámetro en la URL de LinkedIn
+      // 4. ESTRATEGIA FALLBACK: Si tenemos el Job ID, actualizar la URL con currentJobId.
+      //    Usamos replaceState (no pushState) para no crear entradas en el historial.
+      //    NO disparamos popstate — LinkedIn usa sus propios observers de URL en algunos casos.
       if (targetJobId) {
-        const currentUrl = new URL(window.location.href);
-        if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
-          currentUrl.searchParams.set('currentJobId', targetJobId);
-          window.history.pushState({ jobId: targetJobId }, '', currentUrl.toString());
-          window.dispatchEvent(new PopStateEvent('popstate'));
-        }
+        setTimeout(() => {
+          const currentUrl = new URL(window.location.href);
+          if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
+            currentUrl.searchParams.set('currentJobId', targetJobId);
+            window.history.replaceState({ jobId: targetJobId }, '', currentUrl.toString());
+          }
+        }, 150);
       }
 
       // Cerrar posibles modales espontáneos que LinkedIn abra
@@ -610,38 +616,39 @@
   });
 
   function getJobCardElements() {
-    // 1. Selector prioritario: contenedores <li> con atributo de oferta en la lista
-    const listItems = Array.from(document.querySelectorAll(
-      'li[data-occludable-job-id], ' +
-      'li.jobs-search-results__list-item, ' +
-      'li.jobs-search-results-list__list-item, ' +
-      '.scaffold-layout__list-container > li, ' +
-      '[data-view-name="job-card"]'
-    ));
-
-    if (listItems.length > 0) {
-      // Filtrar para asegurarnos de que son ofertas reales y no publicidad/encuestas
-      const realCards = listItems.filter(li => {
-        const text = li.textContent.trim().toLowerCase();
-        const hasJobLink = li.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
-        return hasJobLink && !text.includes('útil') && !text.includes('coincidencia');
-      });
-
-      if (realCards.length > 0) {
-        return realCards;
-      }
+    // ── PRIORIDAD 1: <li> con atributo data-occludable-job-id (el más fiable) ──
+    const byAttribute = Array.from(document.querySelectorAll('li[data-occludable-job-id]'));
+    if (byAttribute.length > 0) {
+      return byAttribute.filter(li => li.querySelector('a[href*="/jobs/view/"]'));
     }
 
-    // 2. Selector secundario: enlaces directos
-    const links = Array.from(document.querySelectorAll('a[href*="/jobs/view/"], a[href*="currentJobId="]'));
-    const valid = links.filter(a => {
-      // Excluir panel derecho
-      if (a.closest('.jobs-details__main-content') || a.closest('.job-view-layout')) return false;
-      const text = a.textContent.trim().toLowerCase();
-      return text.length > 2 && !text.includes('útil');
+    // ── PRIORIDAD 2: <li> de la lista de resultados de búsqueda ───────────────
+    const byListClass = Array.from(document.querySelectorAll(
+      'li.jobs-search-results__list-item, ' +
+      'li.jobs-search-results-list__list-item, ' +
+      '.scaffold-layout__list-container > li'
+    ));
+    const realListItems = byListClass.filter(li => li.querySelector('a[href*="/jobs/view/"]'));
+    if (realListItems.length > 0) {
+      return realListItems;
+    }
+
+    // ── PRIORIDAD 3: enlaces <a> directos en el panel IZQUIERDO ───────────────
+    // Identificar el panel izquierdo: el contenedor de lista de búsqueda
+    // nunca tiene la clase jobs-details ni job-view-layout
+    const allJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
+    const leftPanelLinks = allJobLinks.filter(a => {
+      // Excluir explícitamente el panel derecho (detalle de oferta)
+      if (a.closest('.jobs-details__main-content')) return false;
+      if (a.closest('.job-view-layout')) return false;
+      if (a.closest('[data-view-name="job-details"]')) return false;
+      // Excluir si no tiene texto visible (enlaces ocultos)
+      const text = a.textContent.trim();
+      if (text.length < 2) return false;
+      return true;
     });
 
-    return valid;
+    return leftPanelLinks;
   }
 
   function findNextPageButton() {
