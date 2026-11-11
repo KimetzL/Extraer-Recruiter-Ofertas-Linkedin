@@ -41,10 +41,12 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
 ## 🧠 4. Secretos y Trampas del DOM de LinkedIn (¡NO OLVIDAR!)
 
 ### A. La gran trampa: Las tarjetas NO son enlaces `<a>`
-- En el diseño moderno de LinkedIn (2025/2026), **las ofertas en la lista izquierda están renderizadas como `<div role="button">`**, NO como `<a href="/jobs/view/...">`.
-- **Solo la oferta seleccionada en ese instante** o la vista de detalle tiene una etiqueta `<a href="/jobs/view/...">`.
-- Si buscas `a[href*="/jobs/view/"]`, solo obtendrás **1 resultado**. Si intentas hacer click en ese `<a>`, el navegador navegará a pantalla completa y romperá la búsqueda.
-- **Solución implementada:** Se buscan elementos en la mitad izquierda con `[role="button"]` y `a`, filtrando empresas (`/company/`) y anuncios (`premium`), deduplicando por texto de título.
+- En el diseño moderno de LinkedIn (2025/2026), **las ofertas en la lista izquierda están renderizadas como contenedores `<li>` o `<div role="button">`**, NO como `<a href="/jobs/view/...">`.
+- Si incluyes `a[href*="/jobs/view/"]` en los candidatos de tarjeta o `findClickableInCard` devuelve una etiqueta `<a>`, al hacer click el navegador ejecuta la navegación nativa hacia `https://www.linkedin.com/jobs/view/{jobId}/`, sacando al usuario de los resultados de búsqueda a pantalla completa ("entra en la oferta") y rompiendo el autopilot.
+- **Regla estricta:**
+  1. `getLeftPanelJobCards()` solo debe buscar contenedores (`li`, `.job-card-container`, `div[data-job-id]`) y filtrar elementos anidados con `outerCandidates`.
+  2. `findClickableInCard()` **NUNCA** debe devolver un `<a>`. Solo contenedores `div.job-card-container`, `div[role="button"]` o el propio `li`.
+  3. `clickJobCard()` incluye un listener temporal capture que llama a `e.preventDefault()` y `e.stopImmediatePropagation()` ante cualquier intento de navegación a `/jobs/view/`.
 
 ### B. Clases CSS Ofuscadas y Dinámicas
 - LinkedIn usa clases compiladas aleatorias que cambian periódicamente (ej: `i87ia7`, `i87mg3`, antes `igthn4`).
