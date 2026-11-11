@@ -531,7 +531,7 @@
           return;
         }
         if (response.count === 0) {
-          stopAutopilot('No se encontraron ofertas. Asegúrate de estar en linkedin.com/jobs/search/');
+          stopAutopilot('No se encontraron ofertas en la página actual. Asegúrate de tener los resultados visibles en LinkedIn.');
           return;
         }
         autopilotStatusText.textContent = `Iniciando escaneo... (${response.count} ofertas detectadas)`;
