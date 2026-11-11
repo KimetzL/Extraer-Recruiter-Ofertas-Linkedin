@@ -549,29 +549,36 @@
       // 1. Scroll visible hacia la tarjeta en la lista lateral
       targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // 2. Extraer el Job ID
-      const href = targetCard.href || targetCard.getAttribute('href') || '';
-      const match = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
+      // 2. Extraer el Job ID de la tarjeta o de sus enlaces internos
+      const linkEl = targetCard.tagName === 'A' ? targetCard : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+      const href = (linkEl ? (linkEl.href || linkEl.getAttribute('href')) : '') || targetCard.getAttribute('data-occludable-job-id') || '';
+      const match = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/) || href.match(/^(\d+)$/);
       const targetJobId = match ? match[1] : null;
 
-      // 3. Simular clic real con preventDefault en caso de navegación tradicional
-      // Buscar elementos interactivos internos de la tarjeta
-      const clickableCandidate = targetCard.querySelector('.job-card-list__title, .artdeco-entity-lockup__title, h3, strong') || targetCard;
+      // 3. Selección segura sin navegación tradicional:
+      // Si hacemos clic en un enlace <a> con href completo, el navegador abandona la página.
+      // Para evitarlo, capturamos el evento click temporalmente con preventDefault()
+      // mientras permitimos que el router interno de LinkedIn reciba el evento.
+      const safeClickHandler = (e) => {
+        // Evitamos la navegación tradicional por enlace si es un <a>
+        if (e.target.closest('a')) {
+          e.preventDefault();
+        }
+      };
 
-      clickableCandidate.focus();
+      targetCard.addEventListener('click', safeClickHandler, { capture: true, once: true });
 
-      // Disparamos evento de ratón completo
-      ['mousedown', 'mouseup', 'click'].forEach(evtType => {
-        clickableCandidate.dispatchEvent(new MouseEvent(evtType, {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          buttons: 1
-        }));
-      });
+      // Disparamos evento de ratón simulando al usuario
+      const clickableElement = linkEl || targetCard;
+      clickableElement.focus();
+      clickableElement.dispatchEvent(new MouseEvent('click', {
+        view: window,
+        bubbles: true,
+        cancelable: true,
+        buttons: 1
+      }));
 
-      // 4. Si el router de LinkedIn no cambia automáticamente la oferta por el clic de ratón,
-      // actualizamos la URL con currentJobId para obligar a cargar el panel derecho:
+      // 4. Forzar al panel derecho a mostrar la oferta cambiando el parámetro en la URL de LinkedIn
       if (targetJobId) {
         const currentUrl = new URL(window.location.href);
         if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
@@ -603,46 +610,38 @@
   });
 
   function getJobCardElements() {
-    // Buscar todos los enlaces que abren ofertas de empleo en la columna izquierda
-    // Como vimos en tu captura: <a class="igthn4 igtl58" href="https://www.linkedin.com/jobs/view/4457603604/...">Analyst</a>
-    const allJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
+    // 1. Selector prioritario: contenedores <li> con atributo de oferta en la lista
+    const listItems = Array.from(document.querySelectorAll(
+      'li[data-occludable-job-id], ' +
+      'li.jobs-search-results__list-item, ' +
+      'li.jobs-search-results-list__list-item, ' +
+      '.scaffold-layout__list-container > li, ' +
+      '[data-view-name="job-card"]'
+    ));
 
-    // Filtrar para quedarnos SOLO con los enlaces de ofertas reales (tienen texto con el nombre del puesto)
-    // y descartar duplicados o enlaces auxiliares
-    const seenUrls = new Set();
-    const validJobLinks = [];
+    if (listItems.length > 0) {
+      // Filtrar para asegurarnos de que son ofertas reales y no publicidad/encuestas
+      const realCards = listItems.filter(li => {
+        const text = li.textContent.trim().toLowerCase();
+        const hasJobLink = li.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
+        return hasJobLink && !text.includes('útil') && !text.includes('coincidencia');
+      });
 
-    for (const a of allJobLinks) {
-      // Ignorar si está dentro del panel de detalle derecho (solo queremos la lista izquierda de resultados)
-      if (a.closest('.jobs-details__main-content') || a.closest('.job-view-layout') || a.closest('.job-details-jobs-unified-top-card')) {
-        continue;
+      if (realCards.length > 0) {
+        return realCards;
       }
+    }
 
-      const cleanHref = a.href.split('?')[0];
+    // 2. Selector secundario: enlaces directos
+    const links = Array.from(document.querySelectorAll('a[href*="/jobs/view/"], a[href*="currentJobId="]'));
+    const valid = links.filter(a => {
+      // Excluir panel derecho
+      if (a.closest('.jobs-details__main-content') || a.closest('.job-view-layout')) return false;
       const text = a.textContent.trim().toLowerCase();
-
-      // Debe ser una URL de oferta válida con texto de puesto (no botones de feedback o vacíos)
-      if (cleanHref.includes('/jobs/view/') && text.length > 2 && !seenUrls.has(cleanHref)) {
-        // Excluir textos que sean encuestas o configuraciones
-        if (!text.includes('útil') && !text.includes('coincidencia') && !text.includes('guardar') && !text.includes('verificado')) {
-          seenUrls.add(cleanHref);
-          validJobLinks.push(a);
-        }
-      }
-    }
-
-    if (validJobLinks.length > 0) {
-      return validJobLinks;
-    }
-
-    // Fallback secundario si la búsqueda usa currentJobId
-    const currentIdLinks = Array.from(document.querySelectorAll('a[href*="currentJobId="]'));
-    const validCurrentIdLinks = currentIdLinks.filter(a => {
-      const t = a.textContent.trim();
-      return t.length > 2 && !t.toLowerCase().includes('útil');
+      return text.length > 2 && !text.includes('útil');
     });
 
-    return validCurrentIdLinks;
+    return valid;
   }
 
   function findNextPageButton() {
