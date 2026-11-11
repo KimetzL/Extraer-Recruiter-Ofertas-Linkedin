@@ -1,4 +1,4 @@
-// content.js — Content Script para LinkedIn Jobs
+﻿// content.js — Content Script para LinkedIn Jobs
 // Detecta de forma continua ofertas con recruiter visible mediante atributos semánticos y DOM
 
 (function () {
@@ -349,34 +349,61 @@
   // ── Analiza cualquier bloque de texto para extraer un salario válido ───────
   function extractSalaryFromText(text) {
     if (!text) return null;
-    // Normalizar Unicode (convierte negritas matemáticas como 𝗪𝗵𝗮𝘁’𝘀 a What's)
+    // Normalizar Unicode (convierte negritas matemu00e1ticas como u{1D5EA}u{1D5F5}u{1D5EE}u{1D601}u2019u{1D600} a What's)
     const normalized = text.normalize('NFKD');
 
-    // 1. Patrón con prefijo explícito (Salary Range:, Base salary:, Compensation:, etc.)
-    const prefixRegex = /(?:salary\s*range|base\s*salary|annual\s*salary|target\s*salary|salary|compensation\s*range|compensation|pay\s*range|base\s*pay|pay|hourly\s*rate|rango\s*salarial|sueldo|salario|retribuci[oó]n|remuneraci[oó]n)\s*[:\-–—]?\s*([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|mo|año|hora))?\s*(?:to|-|–|—|a)\s*[$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*(?:brutos|gross|neto|net))?(?:\s*(?:\/|\s*per\s*|\s*al\s*|\s*por\s*|\s*a\s*)(?:yr|year|año|annum|hr|hour|hora|mo|month|mes))?)/i;
+    // 1. Patrón con prefijo explícito (Salary Range:, Base salary:, Compensation:, Hourly range:, etc.)
+    const prefixRegex = /(?:salary\s*range|base\s*salary|annual\s*salary|target\s*salary|salary|compensation\s*range|compensation|pay\s*range|base\s*pay|pay|hourly\s*rate|hourly\s*range|rango\s*salarial|sueldo|salario|retribuci[oó]n|remuneraci[oó]n)\s*[:\-–—]?\s*([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|hour|mo|año|hora))?(?:\s*(?:to|-|–|—|a)\s*[$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|hour|mo|año|hora))?)?(?:\s*(?:brutos|gross|neto|net))?)/i;
     const m1 = normalized.match(prefixRegex);
     if (m1 && m1[1]) {
-      return cleanSalaryString(m1[1]);
+      return normalizeSalaryUnit(cleanSalaryString(m1[1]), normalized);
     }
 
     // 2. Patrón 'Up to $X' o 'Starting at $X'
-    const upToRegex = /(?:up\s*to|starting\s*at|starting\s*from|hasta|desde)\s+([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€)?(?:\s*(?:base(?:\s*salary)?|annually|per\s*year|\/yr|\/year|\/hr|\/hour|gross|brutos))?)/i;
+    const upToRegex = /(?:up\s*to|starting\s*at|starting\s*from|hasta|desde)\s+([$€£]?\s*[\d,.]+\s*(?:k|usd|eur|cad|aud|gbp|€)?(?:\s*(?:annually|per\s*year|\/yr|\/year|\/hr|\/hour))?)/i;
     const m2 = normalized.match(upToRegex);
     if (m2 && m2[1]) {
       const isUpTo = /up\s*to|hasta/i.test(m2[0]);
       const isStarting = /starting|desde/i.test(m2[0]);
       const prefix = isUpTo ? 'Up to ' : (isStarting ? 'Starting at ' : '');
-      return cleanSalaryString(prefix + m2[1]);
+      return normalizeSalaryUnit(cleanSalaryString(prefix + m2[1]), normalized);
     }
 
-    // 3. Patrón de rango general (con símbolo o código de moneda en el rango)
-    const rangeRegex = /([$€£]?\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|€|[$])?(?:\s*\/\s*(?:yr|year|hr|mo|año|hora))?\s*(?:-|–|—|to|a)\s*[$€£]?\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|€|[$])?(?:\s*(?:usd|eur|cad|gbp))?(?:\s*(?:brutos|gross))?(?:\s*(?:\/|\s*per\s*|\s*a\s*|\s*al\s*|\s*por\s*)(?:yr|year|año|annum|hr|hour|hora|mo|month|mes))?)/i;
+    // 3. Patrón de rango con símbolo (captura "$X USD/yr - Y USD/yr", "$60,000–$70,000", "$63-$71 an hour")
+    // Permite código de moneda opcional después del número
+    const rangeRegex = /([$€£]\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|aud)?(?:\s*\/\s*(?:yr|year|hr|hour|mo|month))?(?:\s*(?:-|–|—|to|a)\s*[$€£]?\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|aud)?(?:\s*\/\s*(?:yr|year|hr|hour|mo|month))?)?(?:\s*(?:brutos|gross))?)/i;
     const m3 = normalized.match(rangeRegex);
-    if (m3 && m3[1] && (m3[1].includes('$') || m3[1].includes('€') || m3[1].includes('£') || /usd|eur|cad|gbp/i.test(m3[1]))) {
-      return cleanSalaryString(m3[1]);
+    if (m3 && m3[1]) {
+      return normalizeSalaryUnit(cleanSalaryString(m3[1]), normalized);
+    }
+
+    // 4. Patrón código de moneda sin símbolo ($) — ej: "45 USD/hr - 50 USD/hr", "72,3K USD/yr - 75K USD/yr"
+    const codeRangeRegex = /([\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|aud)\s*(?:\/\s*(?:yr|year|hr|hour|mo|month))?(?:\s*(?:-|–|—|to)\s*[\d,.]+\s*(?:k)?\s*(?:usd|eur|cad|gbp|aud)?(?:\s*\/\s*(?:yr|year|hr|hour|mo|month))?)?)/i;
+    const m4 = normalized.match(codeRangeRegex);
+    if (m4 && m4[1]) {
+      return normalizeSalaryUnit(cleanSalaryString(m4[1]), normalized);
     }
 
     return null;
+  }
+
+  /**
+   * Añade /hr o /yr si el texto contextual lo indica y el valor aún no tiene unidad.
+   * También elimina palabras de periodo capturadas ("per year", "an hour") antes de añadir el sufijo.
+   */
+  function normalizeSalaryUnit(raw, fullText) {
+    if (!raw) return null;
+    // Eliminar palabras de periodo que el regex haya capturado al final, para no duplicarlas
+    let cleaned = raw.replace(/\s*(?:per\s+(?:year|yr|hour|hr|annum)|an\s+hour|a\s+year)\s*$/i, '').trim();
+    // Si ya tiene sufijo /hr /yr etc. — no tocar
+    if (/\/\s*(hr|hour|yr|year|mo|month)/i.test(cleaned)) return cleaned;
+    // Detectar periodo en el contexto completo del texto
+    const ctx = fullText.toLowerCase();
+    const isHourly = /\ban\s+hour\b|\bper\s+hour\b|\bhourly\b|\bper\s+hr\b|\b\/hr\b/.test(ctx);
+    const isYearly = /\bper\s+year\b|\bannually\b|\ba\s+year\b|\bper\s+annum\b|\b\/yr\b|\b\/year\b/.test(ctx);
+    if (isHourly) return cleaned.replace(/[.,;:\s]+$/, '') + '/hr';
+    if (isYearly) return cleaned.replace(/[.,;:\s]+$/, '') + '/yr';
+    return cleaned;
   }
 
   function cleanSalaryString(str) {
