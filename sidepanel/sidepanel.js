@@ -542,7 +542,7 @@
 
   // Contador de scrolls sin nuevos items (para detectar fin real de lista)
   let autopilotScrollCount = 0;
-  const MAX_SCROLL_ATTEMPTS = 6; // Máximo 6 scrolls sin nuevo item antes de paginar
+  const MAX_SCROLL_ATTEMPTS = 8; // Máximo 8 scrolls sin nuevo item antes de paginar
 
   function runAutopilotStep() {
     if (!isAutopilotRunning) return;

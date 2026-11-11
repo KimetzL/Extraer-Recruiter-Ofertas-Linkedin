@@ -549,9 +549,7 @@
       return false;
     }
 
-    // ── AUTOPILOT_CLICK_NEXT: nuevo protocolo para listas virtualizadas ────────
-    // En vez de usar un índice fijo, busca el primer enlace visible aún no procesado.
-    // Si todos los visibles están procesados, hace scroll para revelar más items.
+    // ── AUTOPILOT_CLICK_NEXT: protocolo robusto para lista virtual ────────────
     if (message.type === 'AUTOPILOT_CLICK_NEXT') {
       const links = getLeftPanelJobLinks();
 
@@ -562,17 +560,9 @@
       });
 
       if (!unprocessed) {
-        // No hay links nuevos visibles → intentar scroll para revelar más
-        const container = findJobListScrollContainer();
-        if (container) {
-          const prevScrollTop = container.scrollTop;
-          container.scrollTop += 400; // Avanzar ~2-3 tarjetas
-          const scrolled = container.scrollTop !== prevScrollTop || container.scrollTop === 0;
-          sendResponse({ success: true, scrolled: true, jobId: null });
-        } else {
-          // Sin contenedor encontrado → señal de fin de página
-          sendResponse({ success: false, reason: 'page_done' });
-        }
+        // No hay links nuevos visibles en pantalla -> hacer scroll activo para cargar más
+        const didScroll = performJobListScroll();
+        sendResponse({ success: true, scrolled: true, didScroll, jobId: null });
         return false;
       }
 
@@ -580,18 +570,16 @@
       const targetJobId = extractJobIdFromLink(unprocessed);
       autopilotProcessedIds.add(targetJobId);
 
-      // Scroll suave para que sea visible
-      unprocessed.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // Scroll para asegurar que el elemento esté centrado o visible
+      unprocessed.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-      // Intentar encontrar el <li> padre para hacer click en el contenedor
-      // (evita la navegación que causa hacer click en el <a>)
-      const liParent = unprocessed.closest('li');
-      if (liParent) {
+      // Click: intentar encontrar li/div contenedor
+      const liParent = unprocessed.closest('li') || unprocessed.closest('div[data-job-id]') || unprocessed.parentElement;
+      if (liParent && liParent !== document.body) {
         liParent.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
         liParent.dispatchEvent(new MouseEvent('mouseup',  { bubbles: true, cancelable: true, buttons: 1, view: window }));
         liParent.dispatchEvent(new MouseEvent('click',    { bubbles: true, cancelable: true, buttons: 1, view: window }));
       } else {
-        // No hay <li> padre → click en el <a> bloqueando navegación del navegador
         const blockNav = (e) => {
           e.preventDefault();
           e.stopImmediatePropagation();
@@ -600,7 +588,7 @@
         unprocessed.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
       }
 
-      // Fallback URL: actualizar currentJobId silenciosamente
+      // Fallback URL: actualizar currentJobId silenciosamente si no cambió
       setTimeout(() => {
         try {
           const currentUrl = new URL(window.location.href);
@@ -652,27 +640,87 @@
     });
   }
 
+  // ── Realiza scroll en la columna izquierda de ofertas ─────────────────────
+  function performJobListScroll() {
+    let scrolled = false;
+
+    // 1. Intentar scroll sobre el contenedor de la lista encontrado
+    const container = findJobListScrollContainer();
+    if (container) {
+      const prevTop = container.scrollTop;
+      container.scrollTop += 350;
+      if (container.scrollTop !== prevTop) {
+        scrolled = true;
+      }
+      // Disparar evento scroll sintético
+      container.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }
+
+    // 2. Si no se pudo o además del contenedor, hacer scroll en el último enlace visible
+    const links = getLeftPanelJobLinks();
+    if (links.length > 0) {
+      const lastLink = links[links.length - 1];
+      lastLink.scrollIntoView({ behavior: 'auto', block: 'end' });
+      // Simular evento Wheel hacia abajo en el enlace/contenedor
+      const wheelEvt = new WheelEvent('wheel', {
+        deltaY: 400,
+        bubbles: true,
+        cancelable: true
+      });
+      lastLink.dispatchEvent(wheelEvt);
+      scrolled = true;
+    }
+
+    // 3. Fallback: scroll en ventana general por si el layout es de página completa
+    window.scrollBy({ top: 300, behavior: 'smooth' });
+
+    return scrolled;
+  }
+
   // ── Encuentra el contenedor scrollable de la lista de ofertas ─────────────
   function findJobListScrollContainer() {
-    // Intentar por clases conocidas de LinkedIn
-    const byClass = document.querySelector(
-      '.jobs-search-results-list, [class*="jobs-search-results-list"], .scaffold-layout__list'
-    );
-    if (byClass && byClass.scrollHeight > byClass.clientHeight) return byClass;
+    // A) Selectores de clases conocidas de LinkedIn
+    const candidateSelectors = [
+      '.jobs-search-results-list',
+      '[class*="jobs-search-results-list"]',
+      '.scaffold-layout__list',
+      '[class*="scaffold-layout__list-container"]',
+      '.jobs-search__left-rail',
+      '[class*="jobs-search-results"]'
+    ];
 
-    // Buscar el ancestro scrollable del primer link de oferta en el panel izquierdo
-    const links = getLeftPanelJobLinks();
-    if (links.length === 0) return null;
-
-    let el = links[0].parentElement;
-    while (el && el !== document.body) {
-      const style = window.getComputedStyle(el);
-      const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-      if (isScrollable && el.scrollHeight > el.clientHeight + 10) {
+    for (const sel of candidateSelectors) {
+      const el = document.querySelector(sel);
+      if (el && (el.scrollHeight > el.clientHeight || el.offsetHeight > 0)) {
         return el;
       }
-      el = el.parentElement;
     }
+
+    // B) Buscar subiendo por el árbol DOM desde el primer link de la izquierda
+    const links = getLeftPanelJobLinks();
+    if (links.length > 0) {
+      let el = links[0].parentElement;
+      while (el && el !== document.body && el !== document.documentElement) {
+        const style = window.getComputedStyle(el);
+        const canScroll = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
+        if (canScroll) {
+          return el;
+        }
+        el = el.parentElement;
+      }
+    }
+
+    // C) Buscar cualquier elemento de la mitad izquierda de la pantalla que tenga scroll
+    const allDivs = document.querySelectorAll('div, ul, main, section');
+    for (const div of allDivs) {
+      const rect = div.getBoundingClientRect();
+      if (rect.left < window.innerWidth / 2 && rect.width > 200 && rect.height > 300) {
+        if (div.scrollHeight > div.clientHeight + 50) {
+          return div;
+        }
+      }
+    }
+
     return null;
   }
 
