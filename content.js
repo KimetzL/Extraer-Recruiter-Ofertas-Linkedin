@@ -526,78 +526,93 @@
   scanAndProcess();
 
   // ── Módulo Actor de Autopilot ──────────────────────────────────────────────
+  // IDs ya procesados en esta sesión de autopilot (evita repetir con lista virtual)
+  const autopilotProcessedIds = new Set();
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+    // Resetear IDs procesados al iniciar nueva sesión
+    if (message.type === 'AUTOPILOT_RESET') {
+      autopilotProcessedIds.clear();
+      sendResponse({ success: true });
+      return false;
+    }
+
     if (message.type === 'AUTOPILOT_GET_CARDS') {
-      const cards = getJobCardElements();
+      // Retorna cuántos enlaces de oferta hay visibles en el panel izquierdo ahora mismo
+      const links = getLeftPanelJobLinks();
       sendResponse({
         success: true,
-        count: cards.length,
+        count: links.length,
         hasPagination: !!findNextPageButton()
       });
       return false;
     }
 
-    if (message.type === 'AUTOPILOT_CLICK_CARD') {
-      const cards = getJobCardElements();
-      const targetCard = cards[message.index];
+    // ── AUTOPILOT_CLICK_NEXT: nuevo protocolo para listas virtualizadas ────────
+    // En vez de usar un índice fijo, busca el primer enlace visible aún no procesado.
+    // Si todos los visibles están procesados, hace scroll para revelar más items.
+    if (message.type === 'AUTOPILOT_CLICK_NEXT') {
+      const links = getLeftPanelJobLinks();
 
-      if (!targetCard) {
-        sendResponse({ success: false, error: 'Tarjeta no encontrada en el índice' });
+      // Buscar primer enlace no procesado aún
+      const unprocessed = links.find(a => {
+        const id = extractJobIdFromLink(a);
+        return id && !autopilotProcessedIds.has(id);
+      });
+
+      if (!unprocessed) {
+        // No hay links nuevos visibles → intentar scroll para revelar más
+        const container = findJobListScrollContainer();
+        if (container) {
+          const prevScrollTop = container.scrollTop;
+          container.scrollTop += 400; // Avanzar ~2-3 tarjetas
+          const scrolled = container.scrollTop !== prevScrollTop || container.scrollTop === 0;
+          sendResponse({ success: true, scrolled: true, jobId: null });
+        } else {
+          // Sin contenedor encontrado → señal de fin de página
+          sendResponse({ success: false, reason: 'page_done' });
+        }
         return false;
       }
 
-      // 1. Scroll visible hacia la tarjeta en la lista lateral
-      targetCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // Tenemos un link no procesado: extraer ID y marcarlo
+      const targetJobId = extractJobIdFromLink(unprocessed);
+      autopilotProcessedIds.add(targetJobId);
 
-      // 2. Extraer el Job ID de la tarjeta o de sus enlaces internos
-      const linkEl = targetCard.tagName === 'A'
-        ? targetCard
-        : targetCard.querySelector('a[href*="/jobs/view/"], a[href*="currentJobId="]');
-      const rawHref = (linkEl ? (linkEl.href || linkEl.getAttribute('href')) : '')
-        || targetCard.getAttribute('data-occludable-job-id') || '';
-      const jobIdMatch = rawHref.match(/\/jobs\/view\/(\d+)/)
-        || rawHref.match(/currentJobId=(\d+)/)
-        || rawHref.match(/^(\d+)$/);
-      const targetJobId = jobIdMatch ? jobIdMatch[1] : null;
+      // Scroll suave para que sea visible
+      unprocessed.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      // 3. ESTRATEGIA PRINCIPAL: Hacer click directamente en el <li> contenedor.
-      //    LinkedIn tiene listeners propios en el <li> que cargan el panel derecho
-      //    SIN navegar fuera de la página de búsqueda.
-      //    Solo bloqueamos navegación si el elemento clickeable es un <a>.
-      if (targetCard.tagName === 'LI' || targetCard.tagName === 'DIV') {
-        // Click en el contenedor: LinkedIn lo intercepta con su router (Ember/Voyager)
-        targetCard.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
-        targetCard.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, buttons: 1, view: window }));
-        targetCard.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
-      } else if (linkEl) {
-        // Es un <a>: bloqueamos la navegación del navegador pero dejamos que
-        // el JS de LinkedIn maneje el evento via sus propios listeners en ancestros.
-        const blockNavigation = (e) => {
+      // Intentar encontrar el <li> padre para hacer click en el contenedor
+      // (evita la navegación que causa hacer click en el <a>)
+      const liParent = unprocessed.closest('li');
+      if (liParent) {
+        liParent.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+        liParent.dispatchEvent(new MouseEvent('mouseup',  { bubbles: true, cancelable: true, buttons: 1, view: window }));
+        liParent.dispatchEvent(new MouseEvent('click',    { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      } else {
+        // No hay <li> padre → click en el <a> bloqueando navegación del navegador
+        const blockNav = (e) => {
           e.preventDefault();
           e.stopImmediatePropagation();
         };
-        // Capturamos a nivel de document antes de que el navegador lo procese
-        document.addEventListener('click', blockNavigation, { capture: true, once: true });
-        linkEl.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+        document.addEventListener('click', blockNav, { capture: true, once: true });
+        unprocessed.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
       }
 
-      // 4. ESTRATEGIA FALLBACK: Si tenemos el Job ID, actualizar la URL con currentJobId.
-      //    Usamos replaceState (no pushState) para no crear entradas en el historial.
-      //    NO disparamos popstate — LinkedIn usa sus propios observers de URL en algunos casos.
-      if (targetJobId) {
-        setTimeout(() => {
+      // Fallback URL: actualizar currentJobId silenciosamente
+      setTimeout(() => {
+        try {
           const currentUrl = new URL(window.location.href);
           if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
             currentUrl.searchParams.set('currentJobId', targetJobId);
             window.history.replaceState({ jobId: targetJobId }, '', currentUrl.toString());
           }
-        }, 150);
-      }
+        } catch (_) {}
+      }, 200);
 
-      // Cerrar posibles modales espontáneos que LinkedIn abra
       dismissAnyModalDialog();
-
-      sendResponse({ success: true, jobId: targetJobId });
+      sendResponse({ success: true, jobId: targetJobId, scrolled: false });
       return false;
     }
 
@@ -607,48 +622,63 @@
         sendResponse({ success: false, error: 'No hay más páginas disponibles' });
         return false;
       }
-
       nextBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
       nextBtn.click();
+      // Resetear IDs procesados al cambiar de página
+      autopilotProcessedIds.clear();
       sendResponse({ success: true });
       return false;
     }
   });
 
-  function getJobCardElements() {
-    // ── PRIORIDAD 1: <li> con atributo data-occludable-job-id (el más fiable) ──
-    const byAttribute = Array.from(document.querySelectorAll('li[data-occludable-job-id]'));
-    if (byAttribute.length > 0) {
-      return byAttribute.filter(li => li.querySelector('a[href*="/jobs/view/"]'));
-    }
+  // ── Extrae el Job ID numérico desde un elemento <a> ───────────────────────
+  function extractJobIdFromLink(linkEl) {
+    const href = linkEl.href || linkEl.getAttribute('href') || '';
+    const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
+    return m ? m[1] : null;
+  }
 
-    // ── PRIORIDAD 2: <li> de la lista de resultados de búsqueda ───────────────
-    const byListClass = Array.from(document.querySelectorAll(
-      'li.jobs-search-results__list-item, ' +
-      'li.jobs-search-results-list__list-item, ' +
-      '.scaffold-layout__list-container > li'
-    ));
-    const realListItems = byListClass.filter(li => li.querySelector('a[href*="/jobs/view/"]'));
-    if (realListItems.length > 0) {
-      return realListItems;
-    }
-
-    // ── PRIORIDAD 3: enlaces <a> directos en el panel IZQUIERDO ───────────────
-    // Identificar el panel izquierdo: el contenedor de lista de búsqueda
-    // nunca tiene la clase jobs-details ni job-view-layout
-    const allJobLinks = Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'));
-    const leftPanelLinks = allJobLinks.filter(a => {
-      // Excluir explícitamente el panel derecho (detalle de oferta)
+  // ── Encuentra todos los enlaces de oferta en el panel IZQUIERDO ───────────
+  // LinkedIn renderiza lista virtual: puede haber solo 1-3 en el DOM a la vez.
+  function getLeftPanelJobLinks() {
+    return Array.from(document.querySelectorAll('a[href*="/jobs/view/"]')).filter(a => {
+      // Excluir panel derecho de detalle
       if (a.closest('.jobs-details__main-content')) return false;
       if (a.closest('.job-view-layout')) return false;
       if (a.closest('[data-view-name="job-details"]')) return false;
-      // Excluir si no tiene texto visible (enlaces ocultos)
-      const text = a.textContent.trim();
-      if (text.length < 2) return false;
-      return true;
+      if (a.closest('header')) return false;
+      // Solo links con texto visible (el título de la oferta)
+      return a.textContent.trim().length > 1;
     });
+  }
 
-    return leftPanelLinks;
+  // ── Encuentra el contenedor scrollable de la lista de ofertas ─────────────
+  function findJobListScrollContainer() {
+    // Intentar por clases conocidas de LinkedIn
+    const byClass = document.querySelector(
+      '.jobs-search-results-list, [class*="jobs-search-results-list"], .scaffold-layout__list'
+    );
+    if (byClass && byClass.scrollHeight > byClass.clientHeight) return byClass;
+
+    // Buscar el ancestro scrollable del primer link de oferta en el panel izquierdo
+    const links = getLeftPanelJobLinks();
+    if (links.length === 0) return null;
+
+    let el = links[0].parentElement;
+    while (el && el !== document.body) {
+      const style = window.getComputedStyle(el);
+      const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
+      if (isScrollable && el.scrollHeight > el.clientHeight + 10) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // Mantener getJobCardElements como alias legacy por si acaso
+  function getJobCardElements() {
+    return getLeftPanelJobLinks();
   }
 
   function findNextPageButton() {

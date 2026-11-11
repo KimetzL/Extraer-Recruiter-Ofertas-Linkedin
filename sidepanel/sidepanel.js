@@ -520,89 +520,112 @@
     autopilotStatusText.textContent = 'Conectando con LinkedIn...';
     autopilotCounter.textContent = `0 / ${autopilotMaxToScan}`;
 
-    // Paso 1: Consultar tarjetas disponibles en la página activa
-    chrome.runtime.sendMessage({ type: 'AUTOPILOT_GET_CARDS' }, (response) => {
-      if (chrome.runtime.lastError || !response || !response.success) {
-        stopAutopilot(response?.error || 'Abre LinkedIn Jobs en la pestaña activa');
-        return;
-      }
+    // Resetear IDs procesados en el content script antes de arrancar
+    chrome.runtime.sendMessage({ type: 'AUTOPILOT_RESET' }, () => {
+      if (!isAutopilotRunning) return;
 
-      if (response.count === 0) {
-        stopAutopilot('No se encontraron ofertas en la página');
-        return;
-      }
-
-      autopilotStatusText.textContent = `Escaneando página (0/${response.count})...`;
-      runAutopilotStep();
+      // Verificar que hay al menos 1 oferta visible antes de arrancar
+      chrome.runtime.sendMessage({ type: 'AUTOPILOT_GET_CARDS' }, (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
+          stopAutopilot('Abre LinkedIn Jobs en la pestaña activa');
+          return;
+        }
+        if (response.count === 0) {
+          stopAutopilot('No se encontraron ofertas. Asegúrate de estar en linkedin.com/jobs/search/');
+          return;
+        }
+        autopilotStatusText.textContent = `Iniciando escaneo...`;
+        runAutopilotStep();
+      });
     });
   }
+
+  // Contador de scrolls sin nuevos items (para detectar fin real de lista)
+  let autopilotScrollCount = 0;
+  const MAX_SCROLL_ATTEMPTS = 6; // Máximo 6 scrolls sin nuevo item antes de paginar
 
   function runAutopilotStep() {
     if (!isAutopilotRunning) return;
 
     if (autopilotTotalScanned >= autopilotMaxToScan) {
       const foundCount = allJobs.length - autopilotInitialSavedCount;
-      stopAutopilot(`Completado: ${autopilotTotalScanned} revisadas, ${foundCount > 0 ? foundCount : 0} guardadas`);
+      stopAutopilot(`Completado: ${autopilotTotalScanned} revisadas, ${foundCount > 0 ? foundCount : 0} nuevas guardadas`);
       return;
     }
 
-    // Pedir tarjetas disponibles actualmente
-    chrome.runtime.sendMessage({ type: 'AUTOPILOT_GET_CARDS' }, (response) => {
+    // Usar el nuevo protocolo CLICK_NEXT que maneja lista virtual
+    chrome.runtime.sendMessage({ type: 'AUTOPILOT_CLICK_NEXT' }, (response) => {
       if (!isAutopilotRunning) return;
-      if (chrome.runtime.lastError || !response || !response.success) {
-        stopAutopilot('Pestaña no disponible');
+
+      if (chrome.runtime.lastError) {
+        stopAutopilot('Pestaña no disponible. ¿Estás en LinkedIn Jobs?');
         return;
       }
 
-      const totalCardsInPage = response.count;
+      // Sin respuesta válida
+      if (!response) {
+        stopAutopilot('Sin respuesta de LinkedIn. Recarga la página e inténtalo de nuevo.');
+        return;
+      }
 
-      // Si terminamos todas las tarjetas de esta página, intentar avanzar a la siguiente página
-      if (autopilotCurrentIndex >= totalCardsInPage) {
-        if (response.hasPagination) {
-          autopilotStatusText.textContent = 'Cambiando a siguiente página...';
-          chrome.runtime.sendMessage({ type: 'AUTOPILOT_NEXT_PAGE' }, (pResponse) => {
-            if (!isAutopilotRunning) return;
-            if (pResponse && pResponse.success) {
-              autopilotCurrentIndex = 0;
-              // Esperar a que renderice la nueva página
-              autopilotTimer = setTimeout(() => {
-                runAutopilotStep();
-              }, 3200);
-            } else {
-              stopAutopilot('Fin de resultados');
-            }
-          });
-        } else {
-          stopAutopilot('Fin de resultados');
+      // El content script hizo scroll para revelar más items (lista virtual)
+      if (response.success && response.scrolled) {
+        autopilotScrollCount++;
+        if (autopilotScrollCount >= MAX_SCROLL_ATTEMPTS) {
+          // Demasiados scrolls sin nuevo item → intentar paginación
+          autopilotScrollCount = 0;
+          tryNextPage();
+          return;
         }
+        autopilotStatusText.textContent = `Cargando más ofertas... (scroll ${autopilotScrollCount}/${MAX_SCROLL_ATTEMPTS})`;
+        // Esperar a que el DOM se actualice tras el scroll
+        autopilotTimer = setTimeout(runAutopilotStep, 1000);
         return;
       }
 
-      // Hacer click en la tarjeta del índice actual
-      autopilotStatusText.textContent = `Abriendo oferta ${autopilotCurrentIndex + 1}/${totalCardsInPage}...`;
-      chrome.runtime.sendMessage({
-        type: 'AUTOPILOT_CLICK_CARD',
-        index: autopilotCurrentIndex
-      }, (cResponse) => {
-        if (!isAutopilotRunning) return;
+      // Fin de página detectado en el content script
+      if (!response.success && response.reason === 'page_done') {
+        autopilotScrollCount = 0;
+        tryNextPage();
+        return;
+      }
 
-        autopilotCurrentIndex++;
-        autopilotTotalScanned++;
+      // Error desconocido
+      if (!response.success) {
+        stopAutopilot(response.error || 'Error desconocido');
+        return;
+      }
 
-        // Actualizar barra de progreso
-        const pct = Math.min(100, Math.round((autopilotTotalScanned / autopilotMaxToScan) * 100));
-        autopilotProgressFill.style.width = `${pct}%`;
-        autopilotCounter.textContent = `${autopilotTotalScanned} / ${autopilotMaxToScan}`;
+      // ✅ Click realizado con éxito en una oferta
+      autopilotScrollCount = 0; // Resetear contador de scrolls al encontrar item nuevo
+      autopilotTotalScanned++;
 
-        // Calcular retardo con un ligero factor aleatorio (Jitter ±15%)
-        const baseDelay = parseInt(autopilotDelaySelect.value, 10) || 2000;
-        const jitter = (Math.random() * 0.3 - 0.15) * baseDelay;
-        const delayWithJitter = Math.max(1000, Math.round(baseDelay + jitter));
+      // Actualizar UI
+      const pct = Math.min(100, Math.round((autopilotTotalScanned / autopilotMaxToScan) * 100));
+      autopilotProgressFill.style.width = `${pct}%`;
+      autopilotCounter.textContent = `${autopilotTotalScanned} / ${autopilotMaxToScan}`;
+      autopilotStatusText.textContent = `Oferta ${autopilotTotalScanned} analizada${response.jobId ? ` (ID: ${response.jobId})` : ''}...`;
 
-        autopilotTimer = setTimeout(() => {
-          runAutopilotStep();
-        }, delayWithJitter);
-      });
+      // Esperar el tiempo configurado antes de pasar a la siguiente
+      const baseDelay = parseInt(autopilotDelaySelect.value, 10) || 2000;
+      const jitter = (Math.random() * 0.3 - 0.15) * baseDelay;
+      const delay = Math.max(1200, Math.round(baseDelay + jitter));
+
+      autopilotTimer = setTimeout(runAutopilotStep, delay);
+    });
+  }
+
+  function tryNextPage() {
+    autopilotStatusText.textContent = 'Cambiando a siguiente página...';
+    chrome.runtime.sendMessage({ type: 'AUTOPILOT_NEXT_PAGE' }, (pResponse) => {
+      if (!isAutopilotRunning) return;
+      if (pResponse && pResponse.success) {
+        // Esperar a que renderice la nueva página (3s)
+        autopilotTimer = setTimeout(runAutopilotStep, 3000);
+      } else {
+        const foundCount = allJobs.length - autopilotInitialSavedCount;
+        stopAutopilot(`Fin de resultados. ${autopilotTotalScanned} revisadas, ${foundCount > 0 ? foundCount : 0} guardadas`);
+      }
     });
   }
 
