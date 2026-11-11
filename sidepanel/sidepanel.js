@@ -578,8 +578,8 @@
           return;
         }
         autopilotStatusText.textContent = `Cargando más ofertas... (scroll ${autopilotScrollCount}/${MAX_SCROLL_ATTEMPTS})`;
-        // Esperar a que el DOM se actualice tras el scroll
-        autopilotTimer = setTimeout(runAutopilotStep, 1000);
+        // Esperar a que el DOM se actualice tras el scroll (1600ms para renderizado virtual)
+        autopilotTimer = setTimeout(runAutopilotStep, 1600);
         return;
       }
 

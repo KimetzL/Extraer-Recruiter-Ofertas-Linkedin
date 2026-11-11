@@ -619,112 +619,155 @@
     }
   });
 
-  // ── Extrae el Job ID numérico desde un elemento <a> ───────────────────────
+  // ── Extrae el Job ID numérico desde un elemento ───────────────────────────
   function extractJobIdFromLink(linkEl) {
+    if (!linkEl) return null;
     const href = linkEl.href || linkEl.getAttribute('href') || '';
     const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
-    return m ? m[1] : null;
+    if (m) return m[1];
+
+    const parentWithId = linkEl.closest('[data-job-id], [data-occludable-job-id]');
+    if (parentWithId) {
+      return parentWithId.getAttribute('data-job-id') || parentWithId.getAttribute('data-occludable-job-id');
+    }
+    return null;
   }
 
   // ── Encuentra todos los enlaces de oferta en el panel IZQUIERDO ───────────
-  // LinkedIn renderiza lista virtual: puede haber solo 1-3 en el DOM a la vez.
+  // Deduplica por Job ID para no procesar links duplicados (como logo y título)
   function getLeftPanelJobLinks() {
-    return Array.from(document.querySelectorAll('a[href*="/jobs/view/"]')).filter(a => {
-      // Excluir panel derecho de detalle
-      if (a.closest('.jobs-details__main-content')) return false;
-      if (a.closest('.job-view-layout')) return false;
-      if (a.closest('[data-view-name="job-details"]')) return false;
-      if (a.closest('header')) return false;
-      // Solo links con texto visible (el título de la oferta)
-      return a.textContent.trim().length > 1;
-    });
+    const rawLinks = Array.from(document.querySelectorAll(
+      'a[href*="/jobs/view/"], a[href*="currentJobId="], [data-job-id] a'
+    ));
+
+    const validLinks = [];
+    const seenJobIds = new Set();
+
+    for (const a of rawLinks) {
+      // Excluir panel derecho de detalle y cabeceras
+      if (a.closest('.jobs-details__main-content')) continue;
+      if (a.closest('.job-view-layout')) continue;
+      if (a.closest('[data-view-name="job-details"]')) continue;
+      if (a.closest('header')) continue;
+
+      const jobId = extractJobIdFromLink(a);
+      if (!jobId) continue;
+      if (seenJobIds.has(jobId)) continue;
+
+      // El enlace debe tener texto (ej. título de la oferta) para evitar iconos vacíos
+      const text = (a.textContent || '').trim();
+      if (text.length > 1) {
+        seenJobIds.add(jobId);
+        validLinks.push(a);
+      }
+    }
+
+    return validLinks;
   }
 
-  // ── Realiza scroll en la columna izquierda de ofertas ─────────────────────
+  // ── Realiza scroll efectivo en la lista de ofertas ────────────────────────
   function performJobListScroll() {
     let scrolled = false;
 
-    // 1. Intentar scroll sobre el contenedor de la lista encontrado
-    const container = findJobListScrollContainer();
-    if (container) {
+    // 1. Localizar contenedores que REALMENTE tienen scroll activo
+    const scrollContainers = findActualScrollContainers();
+
+    for (const container of scrollContainers) {
       const prevTop = container.scrollTop;
-      container.scrollTop += 350;
+      // Scroll hacia abajo
+      container.scrollTop += 450;
       if (container.scrollTop !== prevTop) {
         scrolled = true;
       }
-      // Disparar evento scroll sintético
+
+      // Disparar eventos para despertar observadores virtuales de LinkedIn
       container.dispatchEvent(new Event('scroll', { bubbles: true }));
+      container.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: 500,
+        bubbles: true,
+        cancelable: true
+      }));
     }
 
-    // 2. Si no se pudo o además del contenedor, hacer scroll en el último enlace visible
+    // 2. Si hay links visibles, hacer scrollIntoView en el último para forzar el viewport
     const links = getLeftPanelJobLinks();
     if (links.length > 0) {
       const lastLink = links[links.length - 1];
-      lastLink.scrollIntoView({ behavior: 'auto', block: 'end' });
-      // Simular evento Wheel hacia abajo en el enlace/contenedor
-      const wheelEvt = new WheelEvent('wheel', {
-        deltaY: 400,
+      lastLink.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      // Simular evento Wheel directamente en el elemento
+      lastLink.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: 500,
         bubbles: true,
         cancelable: true
-      });
-      lastLink.dispatchEvent(wheelEvt);
+      }));
       scrolled = true;
     }
 
-    // 3. Fallback: scroll en ventana general por si el layout es de página completa
-    window.scrollBy({ top: 300, behavior: 'smooth' });
+    // 3. Fallback en window por si el scroll es de la página completa
+    window.scrollBy({ top: 400, behavior: 'smooth' });
 
     return scrolled;
   }
 
-  // ── Encuentra el contenedor scrollable de la lista de ofertas ─────────────
-  function findJobListScrollContainer() {
-    // A) Selectores de clases conocidas de LinkedIn
-    const candidateSelectors = [
-      '.jobs-search-results-list',
-      '[class*="jobs-search-results-list"]',
-      '.scaffold-layout__list',
-      '[class*="scaffold-layout__list-container"]',
-      '.jobs-search__left-rail',
-      '[class*="jobs-search-results"]'
-    ];
+  // ── Detecta todos los elementos con scroll real en la columna izquierda ────
+  function findActualScrollContainers() {
+    const containers = new Set();
 
-    for (const sel of candidateSelectors) {
-      const el = document.querySelector(sel);
-      if (el && (el.scrollHeight > el.clientHeight || el.offsetHeight > 0)) {
-        return el;
-      }
-    }
-
-    // B) Buscar subiendo por el árbol DOM desde el primer link de la izquierda
+    // Estrategia A: Subir desde los enlaces de la izquierda
     const links = getLeftPanelJobLinks();
     if (links.length > 0) {
       let el = links[0].parentElement;
       while (el && el !== document.body && el !== document.documentElement) {
-        const style = window.getComputedStyle(el);
-        const canScroll = (style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight;
-        if (canScroll) {
-          return el;
+        if (isElementScrollable(el)) {
+          containers.add(el);
         }
         el = el.parentElement;
       }
     }
 
-    // C) Buscar cualquier elemento de la mitad izquierda de la pantalla que tenga scroll
-    const allDivs = document.querySelectorAll('div, ul, main, section');
-    for (const div of allDivs) {
-      const rect = div.getBoundingClientRect();
-      if (rect.left < window.innerWidth / 2 && rect.width > 200 && rect.height > 300) {
-        if (div.scrollHeight > div.clientHeight + 50) {
-          return div;
+    // Estrategia B: Buscar en toda la mitad izquierda del viewport
+    if (containers.size === 0) {
+      const candidates = document.querySelectorAll('div, ul, main, section, aside');
+      for (const el of candidates) {
+        const rect = el.getBoundingClientRect();
+        if (rect.left < window.innerWidth * 0.65 && rect.width > 150 && rect.height > 150) {
+          if (isElementScrollable(el)) {
+            containers.add(el);
+          }
         }
       }
     }
 
-    return null;
+    return Array.from(containers);
   }
 
-  // Mantener getJobCardElements como alias legacy por si acaso
+  // Comprueba si un elemento tiene scroll activo real
+  function isElementScrollable(el) {
+    if (!el || el === document.body || el === document.documentElement) return false;
+    const style = window.getComputedStyle(el);
+    const overflowY = style.overflowY;
+    if (overflowY !== 'auto' && overflowY !== 'scroll') return false;
+    if (el.scrollHeight <= el.clientHeight) return false;
+
+    // Prueba física: intentar mover 2px
+    const initial = el.scrollTop;
+    el.scrollTop = initial + 2;
+    if (el.scrollTop !== initial) {
+      el.scrollTop = initial; // restaurar
+      return true;
+    }
+    // Si estaba al fondo, intentar hacia arriba
+    if (initial > 0) {
+      el.scrollTop = initial - 2;
+      if (el.scrollTop !== initial) {
+        el.scrollTop = initial;
+        return true;
+      }
+    }
+    return el.scrollHeight > el.clientHeight + 100;
+  }
+
+  // Mantener getJobCardElements como alias legacy
   function getJobCardElements() {
     return getLeftPanelJobLinks();
   }
