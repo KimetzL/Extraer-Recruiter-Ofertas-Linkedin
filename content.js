@@ -526,81 +526,67 @@
   scanAndProcess();
 
   // ── Módulo Actor de Autopilot ──────────────────────────────────────────────
-  // IDs ya procesados en esta sesión de autopilot (evita repetir con lista virtual)
-  const autopilotProcessedIds = new Set();
+  // Títulos / IDs ya procesados en esta sesión de autopilot
+  const autopilotProcessedKeys = new Set();
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    // Resetear IDs procesados al iniciar nueva sesión
+    // Resetear tarjetas procesadas al iniciar nueva sesión
     if (message.type === 'AUTOPILOT_RESET') {
-      autopilotProcessedIds.clear();
+      autopilotProcessedKeys.clear();
       sendResponse({ success: true });
       return false;
     }
 
     if (message.type === 'AUTOPILOT_GET_CARDS') {
-      // Retorna cuántos enlaces de oferta hay visibles en el panel izquierdo ahora mismo
-      const links = getLeftPanelJobLinks();
+      const cards = getLeftPanelJobCards();
       sendResponse({
         success: true,
-        count: links.length,
+        count: cards.length,
         hasPagination: !!findNextPageButton()
       });
       return false;
     }
 
-    // ── AUTOPILOT_CLICK_NEXT: protocolo robusto para lista virtual ────────────
+    // ── AUTOPILOT_CLICK_NEXT: selecciona la siguiente tarjeta de empleo ────────
     if (message.type === 'AUTOPILOT_CLICK_NEXT') {
-      const links = getLeftPanelJobLinks();
+      const cards = getLeftPanelJobCards();
 
-      // Buscar primer enlace no procesado aún
-      const unprocessed = links.find(a => {
-        const id = extractJobIdFromLink(a);
-        return id && !autopilotProcessedIds.has(id);
-      });
+      // Buscar la primera tarjeta de empleo no procesada aún
+      const targetCard = cards.find(c => !autopilotProcessedKeys.has(c.key));
 
-      if (!unprocessed) {
-        // No hay links nuevos visibles en pantalla -> hacer scroll activo para cargar más
+      if (!targetCard) {
+        // Todas las tarjetas visibles ya fueron procesadas -> hacer scroll suave en la lista
         const didScroll = performJobListScroll();
         sendResponse({ success: true, scrolled: true, didScroll, jobId: null });
         return false;
       }
 
-      // Tenemos un link no procesado: extraer ID y marcarlo
-      const targetJobId = extractJobIdFromLink(unprocessed);
-      autopilotProcessedIds.add(targetJobId);
+      // Marcar como procesada
+      autopilotProcessedKeys.add(targetCard.key);
 
-      // Scroll para asegurar que el elemento esté centrado o visible
-      unprocessed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Centrar el elemento visiblemente
+      targetCard.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-      // Click: intentar encontrar li/div contenedor
-      const liParent = unprocessed.closest('li') || unprocessed.closest('div[data-job-id]') || unprocessed.parentElement;
-      if (liParent && liParent !== document.body) {
-        liParent.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
-        liParent.dispatchEvent(new MouseEvent('mouseup',  { bubbles: true, cancelable: true, buttons: 1, view: window }));
-        liParent.dispatchEvent(new MouseEvent('click',    { bubbles: true, cancelable: true, buttons: 1, view: window }));
-      } else {
+      // Click seguro: si es enlace <a>, prevenir navegación tradicional fuera de la búsqueda
+      if (targetCard.element.tagName === 'A' || targetCard.element.closest('a')) {
         const blockNav = (e) => {
           e.preventDefault();
           e.stopImmediatePropagation();
         };
         document.addEventListener('click', blockNav, { capture: true, once: true });
-        unprocessed.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, buttons: 1, view: window }));
       }
 
-      // Fallback URL: actualizar currentJobId silenciosamente si no cambió
-      setTimeout(() => {
-        try {
-          const currentUrl = new URL(window.location.href);
-          if (currentUrl.searchParams.get('currentJobId') !== targetJobId) {
-            currentUrl.searchParams.set('currentJobId', targetJobId);
-            window.history.replaceState({ jobId: targetJobId }, '', currentUrl.toString());
-          }
-        } catch (_) {}
-      }, 200);
+      // Disparar click en el elemento o su contenedor
+      targetCard.element.focus();
+      targetCard.element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      targetCard.element.dispatchEvent(new MouseEvent('mouseup',  { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      targetCard.element.dispatchEvent(new MouseEvent('click',    { bubbles: true, cancelable: true, buttons: 1, view: window }));
 
+      // Cerrar posibles modales espontáneos
       dismissAnyModalDialog();
-      sendResponse({ success: true, jobId: targetJobId, scrolled: false });
+
+      sendResponse({ success: true, jobId: targetCard.jobId || targetCard.title, scrolled: false });
       return false;
     }
 
@@ -612,128 +598,129 @@
       }
       nextBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
       nextBtn.click();
-      // Resetear IDs procesados al cambiar de página
-      autopilotProcessedIds.clear();
+      autopilotProcessedKeys.clear();
       sendResponse({ success: true });
       return false;
     }
   });
 
   // ── Extrae el Job ID numérico desde un elemento ───────────────────────────
-  function extractJobIdFromLink(linkEl) {
-    if (!linkEl) return null;
-    const href = linkEl.href || linkEl.getAttribute('href') || '';
+  function extractJobIdFromElement(el) {
+    if (!el) return null;
+    const href = el.href || el.getAttribute('href') || '';
     const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
     if (m) return m[1];
 
-    const parentWithId = linkEl.closest('[data-job-id], [data-occludable-job-id]');
+    const parentWithId = el.closest('[data-job-id], [data-occludable-job-id]');
     if (parentWithId) {
       return parentWithId.getAttribute('data-job-id') || parentWithId.getAttribute('data-occludable-job-id');
     }
     return null;
   }
 
-  // ── Encuentra todos los enlaces de oferta en el panel IZQUIERDO ───────────
-  // Deduplica por Job ID para no procesar links duplicados (como logo y título)
-  function getLeftPanelJobLinks() {
-    const rawLinks = Array.from(document.querySelectorAll(
-      'a[href*="/jobs/view/"], a[href*="currentJobId="], [data-job-id] a'
+  // ── Encuentra todas las tarjetas de empleo en el panel IZQUIERDO ──────────
+  // En LinkedIn moderno, las tarjetas pueden ser <div role="button"> o <a>
+  function getLeftPanelJobCards() {
+    const rawCandidates = Array.from(document.querySelectorAll(
+      'a[href*="/jobs/view/"], [role="button"], li.jobs-search-results__list-item, [data-occludable-job-id]'
     ));
 
-    const validLinks = [];
-    const seenJobIds = new Set();
+    const validCards = [];
+    const seenTitles = new Set();
 
-    for (const a of rawLinks) {
-      // Excluir panel derecho de detalle y cabeceras
-      if (a.closest('.jobs-details__main-content')) continue;
-      if (a.closest('.job-view-layout')) continue;
-      if (a.closest('[data-view-name="job-details"]')) continue;
-      if (a.closest('header')) continue;
+    for (const el of rawCandidates) {
+      // 1. Debe estar en la mitad izquierda de la pantalla
+      const rect = el.getBoundingClientRect();
+      if (rect.left > window.innerWidth * 0.52 || rect.width < 120) continue;
+      if (rect.height < 24 || rect.height > 250) continue;
+      if (rect.top < 60) continue; // Debajo del encabezado
 
-      const jobId = extractJobIdFromLink(a);
-      if (!jobId) continue;
-      if (seenJobIds.has(jobId)) continue;
+      // 2. Excluir panel derecho de detalle
+      if (el.closest('.jobs-details__main-content')) continue;
+      if (el.closest('.job-view-layout')) continue;
+      if (el.closest('[data-view-name="job-details"]')) continue;
+      if (el.closest('header')) continue;
 
-      // El enlace debe tener texto (ej. título de la oferta) para evitar iconos vacíos
-      const text = (a.textContent || '').trim();
-      if (text.length > 1) {
-        seenJobIds.add(jobId);
-        validLinks.push(a);
+      // 3. Excluir enlaces ajenos
+      if (el.href) {
+        if (el.href.includes('/company/')) continue;
+        if (el.href.includes('premium')) continue;
+        if (el.href.includes('/messaging/')) continue;
+        if (el.href.includes('/in/')) continue;
       }
+
+      // 4. Obtener el texto del título
+      const text = (el.innerText || '').trim();
+      const firstLine = text.split('\n')[0].trim();
+      const lower = firstLine.toLowerCase();
+
+      // Excluir botones de la interfaz
+      const isUiButton = [
+        'activar premium', 'premium', 'guardar', 'guardado', 'descartar',
+        'compartir', 'enviar', 'solicitar', 'filtros', 'todos los filtros',
+        'fácil', 'alerta', 'mostrar más', 'siguiente', 'anterior', 'cerrar',
+        'verificado', 'opinión', 'enviar candidatura'
+      ].some(ui => lower.includes(ui));
+      if (isUiButton) continue;
+
+      if (firstLine.length < 3 || firstLine.length > 120) continue;
+
+      // Deduplicar por título normalizado
+      const normKey = lower.replace(/[^a-z0-9]/g, '').slice(0, 30);
+      if (!normKey || seenTitles.has(normKey)) continue;
+      seenTitles.add(normKey);
+
+      const jobId = extractJobIdFromElement(el);
+
+      validCards.push({
+        element: el,
+        key: jobId || normKey,
+        title: firstLine,
+        jobId: jobId
+      });
     }
 
-    return validLinks;
+    return validCards;
   }
 
-  // ── Realiza scroll efectivo en la lista de ofertas ────────────────────────
+  // ── Realiza scroll moderado SOLO en la lista de ofertas (NUNCA en window) ──
   function performJobListScroll() {
     let scrolled = false;
 
-    // 1. Localizar contenedores que REALMENTE tienen scroll activo
+    // Localizar el contenedor scrollable exacto de la lista
     const scrollContainers = findActualScrollContainers();
 
     for (const container of scrollContainers) {
       const prevTop = container.scrollTop;
-      // Scroll hacia abajo
-      container.scrollTop += 450;
+      // Scroll moderado (220px = ~2 tarjetas) para no saltarse ofertas
+      container.scrollTop += 220;
       if (container.scrollTop !== prevTop) {
         scrolled = true;
       }
 
-      // Disparar eventos para despertar observadores virtuales de LinkedIn
+      // Disparar eventos de scroll y rueda para activar la virtualización
       container.dispatchEvent(new Event('scroll', { bubbles: true }));
       container.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: 500,
+        deltaY: 250,
         bubbles: true,
         cancelable: true
       }));
     }
-
-    // 2. Si hay links visibles, hacer scrollIntoView en el último para forzar el viewport
-    const links = getLeftPanelJobLinks();
-    if (links.length > 0) {
-      const lastLink = links[links.length - 1];
-      lastLink.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      // Simular evento Wheel directamente en el elemento
-      lastLink.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: 500,
-        bubbles: true,
-        cancelable: true
-      }));
-      scrolled = true;
-    }
-
-    // 3. Fallback en window por si el scroll es de la página completa
-    window.scrollBy({ top: 400, behavior: 'smooth' });
 
     return scrolled;
   }
 
-  // ── Detecta todos los elementos con scroll real en la columna izquierda ────
+  // ── Detecta los contenedores con scroll real en la columna izquierda ──────
   function findActualScrollContainers() {
     const containers = new Set();
 
-    // Estrategia A: Subir desde los enlaces de la izquierda
-    const links = getLeftPanelJobLinks();
-    if (links.length > 0) {
-      let el = links[0].parentElement;
-      while (el && el !== document.body && el !== document.documentElement) {
+    // Buscar contenedores scrollables en la mitad izquierda
+    const candidates = document.querySelectorAll('div, ul, main, section, aside');
+    for (const el of candidates) {
+      const rect = el.getBoundingClientRect();
+      if (rect.left < window.innerWidth * 0.52 && rect.width > 200 && rect.height > 200) {
         if (isElementScrollable(el)) {
           containers.add(el);
-        }
-        el = el.parentElement;
-      }
-    }
-
-    // Estrategia B: Buscar en toda la mitad izquierda del viewport
-    if (containers.size === 0) {
-      const candidates = document.querySelectorAll('div, ul, main, section, aside');
-      for (const el of candidates) {
-        const rect = el.getBoundingClientRect();
-        if (rect.left < window.innerWidth * 0.65 && rect.width > 150 && rect.height > 150) {
-          if (isElementScrollable(el)) {
-            containers.add(el);
-          }
         }
       }
     }
@@ -749,14 +736,13 @@
     if (overflowY !== 'auto' && overflowY !== 'scroll') return false;
     if (el.scrollHeight <= el.clientHeight) return false;
 
-    // Prueba física: intentar mover 2px
+    // Prueba física: comprobar si scrollTop se puede mover
     const initial = el.scrollTop;
     el.scrollTop = initial + 2;
     if (el.scrollTop !== initial) {
       el.scrollTop = initial; // restaurar
       return true;
     }
-    // Si estaba al fondo, intentar hacia arriba
     if (initial > 0) {
       el.scrollTop = initial - 2;
       if (el.scrollTop !== initial) {
@@ -767,9 +753,12 @@
     return el.scrollHeight > el.clientHeight + 100;
   }
 
-  // Mantener getJobCardElements como alias legacy
+  // Mantener alias legacy por compatibilidad
+  function getLeftPanelJobLinks() {
+    return getLeftPanelJobCards().map(c => c.element);
+  }
   function getJobCardElements() {
-    return getLeftPanelJobLinks();
+    return getLeftPanelJobCards().map(c => c.element);
   }
 
   function findNextPageButton() {
