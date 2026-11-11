@@ -851,7 +851,8 @@
   // ── Encuentra todas las tarjetas de empleo en el panel IZQUIERDO ──────────
   // Compatible con /jobs/search/, /jobs/search-results/ y cualquier vista de LinkedIn Jobs
   function getLeftPanelJobCards() {
-    const rawCandidates = Array.from(document.querySelectorAll(
+    // 1. Candidatos: SOLO contenedores de tarjeta reales (NUNCA enlaces <a>)
+    let rawCandidates = Array.from(document.querySelectorAll(
       'li.jobs-search-results__list-item, ' +
       'li.scaffold-layout__list-item, ' +
       'li[data-occludable-job-id], ' +
@@ -859,19 +860,31 @@
       '.jobs-search-results-list li, ' +
       '[data-view-name="job-card"], ' +
       '.job-card-container, ' +
-      'a[href*="/jobs/view/"], ' +
-      '[role="button"]'
+      'div[data-job-id]'
     ));
+
+    // Fallback: si no hay contenedores conocidos
+    if (rawCandidates.length === 0) {
+      rawCandidates = Array.from(document.querySelectorAll(
+        '.scaffold-layout__list li, ul.scaffold-layout__list-container > *'
+      ));
+    }
+
+    // 2. Filtrar elementos anidados: si un candidato está contenido dentro de otro,
+    // conservar solo el contenedor exterior para evitar duplicados
+    const outerCandidates = rawCandidates.filter(el => {
+      return !rawCandidates.some(other => other !== el && other.contains(el));
+    });
 
     const validCards = [];
     const seenKeys = new Set();
 
-    for (const el of rawCandidates) {
+    for (const el of outerCandidates) {
       // 1. Debe estar en la mitad izquierda de la pantalla
       const rect = el.getBoundingClientRect();
       if (rect.left > window.innerWidth * 0.52 || rect.left < 0) continue;
       if (rect.width < 120) continue;
-      // Altura física: los filtros miden 28-36px. Las tarjetas reales miden entre 45px y 350px
+      // Altura física: los botones de filtro miden 28-36px. Las tarjetas reales miden entre 45px y 350px
       if (rect.height < 45 || rect.height > 350) continue;
       if (rect.top < 60) continue; // Debajo del encabezado
 
@@ -883,7 +896,7 @@
       // 3. Excluir filtros y cabeceras
       if (isFilterButton(el)) continue;
 
-      // 4. Excluir enlaces ajenos
+      // 4. Excluir enlaces ajenos si el elemento es un enlace
       if (el.href) {
         if (el.href.includes('/company/')) continue;
         if (el.href.includes('premium')) continue;
@@ -932,26 +945,40 @@
   }
 
   // ── Localiza el mejor elemento clickeable dentro de la tarjeta ─────────────
+  // NUNCA devuelve una etiqueta <a> para evitar navegación fuera de la búsqueda
   function findClickableInCard(cardEl) {
     if (!cardEl) return cardEl;
 
-    // 1. Contenedor de tarjeta clickeable interno con role="button" (común en LinkedIn)
-    const roleButton = cardEl.querySelector(
-      '.job-card-container, div[role="button"]:not([aria-label*="Guardar"]):not([aria-label*="Descartar"]):not([aria-label*="Save"]):not([aria-label*="Dismiss"])'
-    );
-    if (roleButton) return roleButton;
+    // 1. Contenedor interno específico de LinkedIn (.job-card-container)
+    const containerDiv = cardEl.querySelector('.job-card-container');
+    if (containerDiv && containerDiv.tagName !== 'A') {
+      return containerDiv;
+    }
 
-    // 2. Si cardEl mismo tiene role="button" y no es botón auxiliar
-    if (cardEl.getAttribute?.('role') === 'button' && !isAuxiliaryButton(cardEl)) {
+    // 2. Div interno con role="button" (común en LinkedIn para selección de tarjeta)
+    const roleButton = cardEl.querySelector(
+      'div[role="button"]:not([aria-label*="Guardar"]):not([aria-label*="Descartar"]):not([aria-label*="Save"]):not([aria-label*="Dismiss"]):not([aria-label*="Compartir"]):not([aria-label*="Share"])'
+    );
+    if (roleButton && roleButton.tagName !== 'A') {
+      return roleButton;
+    }
+
+    // 3. Si cardEl mismo es un div con role="button"
+    if (cardEl.getAttribute?.('role') === 'button' && cardEl.tagName !== 'A' && !isAuxiliaryButton(cardEl)) {
       return cardEl;
     }
 
-    // 3. Enlace con título del empleo
-    const titleLink = cardEl.querySelector('.job-card-list__title, .job-card-container__link, a[href*="/jobs/view/"]');
-    if (titleLink) return titleLink;
+    // 4. Si cardEl no es un <a>, usar cardEl directamente (ej. el <li>)
+    if (cardEl.tagName !== 'A') {
+      return cardEl;
+    }
 
-    // 4. El propio elemento de la tarjeta
-    return cardEl;
+    // 5. Si cardEl es un <a>, usar su contenedor padre que NO sea <a>
+    let parent = cardEl.parentElement;
+    while (parent && parent.tagName === 'A') {
+      parent = parent.parentElement;
+    }
+    return parent || cardEl;
   }
 
   function isAuxiliaryButton(el) {
@@ -969,21 +996,28 @@
     // Scroll suave solo si el elemento no está ya en el viewport
     cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Si clickable es una etiqueta <a>, interceptar navegación para evitar full-page reload
-    if (clickable.tagName === 'A' || clickable.closest('a')) {
-      const blockNav = (e) => {
+    // Bloqueo estricto de navegación accidental: si cualquier evento intenta
+    // disparar navegación fuera de la búsqueda hacia un enlace /jobs/view/, cancelarlo
+    const blockJobNav = (e) => {
+      const anchor = e.target.closest?.('a[href*="/jobs/view/"], a[href*="/jobs/search"]');
+      if (anchor) {
         e.preventDefault();
-      };
-      clickable.addEventListener('click', blockNav, { capture: true, once: true });
-    }
+        e.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener('click', blockJobNav, { capture: true, once: true });
+    setTimeout(() => {
+      document.removeEventListener('click', blockJobNav, { capture: true });
+    }, 600);
 
+    // Disparar click en el elemento contenedor seguro (<div> o <li>)
     clickable.focus?.();
     clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
     clickable.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, buttons: 1, view: window }));
     clickable.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, buttons: 1, view: window }));
 
-    // Si clickable es un elemento interno, disparar también en el contenedor
-    if (clickable !== cardEl) {
+    // Si clickable es un elemento interno y el contenedor no es un <a>, disparar también en el contenedor
+    if (clickable !== cardEl && cardEl.tagName !== 'A') {
       cardEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
       cardEl.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, buttons: 1, view: window }));
       cardEl.dispatchEvent(new MouseEvent('click',     { bubbles: true, cancelable: true, buttons: 1, view: window }));
