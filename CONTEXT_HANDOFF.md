@@ -34,7 +34,7 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
 | **Side Panel UI** | ✅ 100% Funcionando | Contadores en vivo, buscador instantáneo, exportar CSV limpio con BOM UTF-8. |
 | **Modal Detalle + Copiar** | ✅ 100% Funcionando | Dialog nativo `<dialog>`, muestra todo formateado y botón "Copiar todo" verde. |
 | **Modales de Confirmación** | ✅ 100% Funcionando | Tanto para borrado individual como para "Borrar todo", evita pérdidas de datos. |
-| **Auto-Pilot (Navegación)** | 🟡 Operativo con detalles | Ya hace click en ofertas sin salir de la página y detecta recruiters, pero tiene 3 detalles a pulir (ver sección 6). |
+| **Auto-Pilot (Navegación)** | ✅ 100% Funcionando | Recorre ofertas 1 a 1 sin saltos ni duplicados por título idéntico. Paginación automática activa con soporte de controles modernos de LinkedIn. |
 
 ---
 
@@ -96,8 +96,9 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
 3. ✅ **Arranque suave y centrado inicial:**
    - En `AUTOPILOT_RESET` se devuelve `scrollTop` a 0 del contenedor si estaba desplazado, y se usa `scrollIntoView({ block: 'nearest' })` para no provocar saltos bruscos si la primera tarjeta ya está visible.
 
-4. 🟡 **Paginación automática a la siguiente página (Siguiente paso):**
-   - Cuando se agotan los resultados de la página actual, asegurar que `findNextPageButton()` clicke en el botón de página siguiente ("Siguiente", flecha o número de página) y reanude la lista tras la carga diferida.
+4. ✅ **Paginación automática a la siguiente página (`fa3fc3b`):**
+   - *Causa raíz:* LinkedIn modernizó los controles de paginación con `data-testid="pagination-controls-next-button-visible"` e icono SVG `#chevron-right-outline-small`, sin clases clásicas `artdeco-pagination` ni `aria-label`.
+   - *Solución implementada:* Detección multicapa en `findNextPageButton()` (`data-testid`, SVG chevron-right, texto "Siguiente", fallback a botón de página siguiente `N+1`). Detección instantánea de fin de lista (`didScroll === false`) que salta de página sin esperas. Limpieza de claves y vuelta al top (`scrollTop = 0`) para arrancar de inmediato en la nueva página.
 
 ---
 
