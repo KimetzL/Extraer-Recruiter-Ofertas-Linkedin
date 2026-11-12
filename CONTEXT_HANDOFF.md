@@ -84,12 +84,14 @@ Una extensión de Google Chrome (Manifest V3) alojada en `d:\Linkedin` que autom
    - *Causa raíz:* `[role="button"]` a nivel de documento capturaba los botones de filtro de la barra superior ("Fecha de publicación"), abriendo el desplegable "Últimas 24h...".
    - *Solución:* Búsqueda acotada a `getJobListContainer()`, exclusión explícita con `isFilterOrHeaderElement` y filtro de altura física (`rect.height >= 50px`, ya que los botones de filtro miden 28-36px).
 
-2. ✅ **Evitar saltos ("se salta una, dos, va más abajo de la 5"):**
-   - *Causa raíz:*
-     1. Múltiples tarjetas patrocinadas tenían `firstLine` = `"Promocionado"`, por lo que el `Set` deduplicador descartaba todas las siguientes ofertas patrocinadas pensando que eran la misma oferta repetida.
-     2. Los términos `'verificado'` y `'fácil'` estaban en la lista negra `isUiButton`, lo que descartaba tarjetas que tuvieran insignias de verificación o "Fácil solicitud".
-     3. Había elementos anidados (ej. contenedor e hijo) que rompían la secuencia.
-   - *Solución:* Extracción semántica de títulos saltando insignias (`isBadgeText`), deduplicación por Job ID numérico real (desde `data-job-id`, `data-occludable-job-id`, `data-entity-urn` o URN embebido), des-anidamiento con `parent.contains(child)`, y ordenación estricta por `rect.top` ascendente para empezar siempre por la primera oferta superior.
+2. ✅ **Evitar saltos ("se salta una, dos, va más abajo de la 5") — RESUELTO DEFINITIVAMENTE:**
+   - *Causa raíz descubierta en vídeo:* En búsquedas con keywords compuestas (`Data Analyst or Data Engineer...`), decenas de ofertas distintas tienen el **mismo título idéntico** (ej. tres ofertas consecutivas de "Data Analyst"). El código anterior hacía fallback de deduplicación a `title_dataanalyst`, por lo que el `Set` descartaba inmediatamente la 2ª, 3ª y 4ª oferta como si fuesen duplicadas, saltándoselas todas. Además, el scroll avanzaba 180px (más de 1 tarjeta), saltándose ofertas virtuales.
+   - *Solución implementada (`948dc77`):*
+     1. **NUNCA deduplicar por título:** Si dos ofertas tienen el mismo título, ambas se conservan.
+     2. **Deduplicación por Job ID numérico robusto:** `extractJobIdFromElement` busca en `cardRoot` (URNs `jobPosting:(\d+)`, enlaces `/jobs/view/(\d+)`, atributos `data-occludable-job-id`, `data-chameleon-result-urn` y números de 10 dígitos `4\d{9}`).
+     3. **Des-anidado DOM seguro:** Solo se descartan elementos que sean hijos/padres de otra tarjeta ya añadida (`isNested`), manteniendo todas las ofertas distintas.
+     4. **Clave compuesta única:** Si una tarjeta no tuviese ID, combina empresa, ubicación, título y contador DOM de sesión único (`card_${comp}_${loc}_${title}_${counter}`).
+     5. **Scroll paso a paso:** Reducido a 130px (exactamente 1 tarjeta de LinkedIn) para que avance de 1 en 1 sin saltarse nada.
 
 3. ✅ **Arranque suave y centrado inicial:**
    - En `AUTOPILOT_RESET` se devuelve `scrollTop` a 0 del contenedor si estaba desplazado, y se usa `scrollIntoView({ block: 'nearest' })` para no provocar saltos bruscos si la primera tarjeta ya está visible.
