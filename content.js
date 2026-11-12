@@ -638,6 +638,7 @@
     if (message.type === 'AUTOPILOT_RESET') {
       autopilotProcessedKeys.clear();
       document.querySelectorAll('[data-autopilot-processed]').forEach(el => el.removeAttribute('data-autopilot-processed'));
+      document.querySelectorAll('[data-rf-autopilot-key]').forEach(el => el.removeAttribute('data-rf-autopilot-key'));
       const scrollContainers = findActualScrollContainers();
       for (const sc of scrollContainers) {
         if (sc.scrollTop > 0) sc.scrollTop = 0;
@@ -662,19 +663,26 @@
       const cards = getLeftPanelJobCards();
 
       // Buscar la primera tarjeta de empleo no procesada aún (ordenadas de arriba a abajo)
-      const targetCard = cards.find(c => !autopilotProcessedKeys.has(c.key));
+      const targetCard = cards.find(c => {
+        if (autopilotProcessedKeys.has(c.key)) return false;
+        if (c.element.getAttribute('data-autopilot-processed') === 'true') return false;
+        if (c.element.closest?.('[data-autopilot-processed="true"]')) return false;
+        return true;
+      });
 
       if (!targetCard) {
-        // Todas las tarjetas visibles ya fueron procesadas -> hacer scroll suave en la lista
+        // Todas las tarjetas visibles ya fueron procesadas -> hacer scroll suave en la lista (1 tarjeta)
         const didScroll = performJobListScroll();
         sendResponse({ success: true, scrolled: true, didScroll, jobId: null });
         return false;
       }
 
-      // Marcar como procesada
+      // Marcar como procesada en el Set y en el elemento DOM de la tarjeta
       autopilotProcessedKeys.add(targetCard.key);
       try {
         targetCard.element.setAttribute('data-autopilot-processed', 'true');
+        const cardRoot = targetCard.element.closest('li, [data-occludable-job-id]') || targetCard.element;
+        cardRoot.setAttribute('data-autopilot-processed', 'true');
       } catch (_) {}
 
       // Click seguro y efectivo
@@ -758,54 +766,96 @@
     return false;
   }
 
-  // ── Extrae el Job ID numérico desde un elemento ───────────────────────────
+  // ── Extrae el Job ID numérico desde un elemento o sus ancestros ──────────
   function extractJobIdFromElement(el) {
     if (!el) return null;
 
-    // 1. Atributo directo o en ancestro/hijo cercano
-    const idAttrs = ['data-job-id', 'data-occludable-job-id', 'data-job-posting-id'];
-    for (const attr of idAttrs) {
-      const val = el.getAttribute?.(attr) || el.closest?.(`[${attr}]`)?.getAttribute(attr);
-      if (val && /^\d+$/.test(val)) return val;
-      const child = el.querySelector?.(`[${attr}]`);
-      if (child) {
-        const childVal = child.getAttribute(attr);
-        if (childVal && /^\d+$/.test(childVal)) return childVal;
-      }
-    }
+    // Expandir búsqueda al contenedor li o ancestro de tarjeta más representativo
+    const cardRoot = el.closest?.('li, [data-occludable-job-id], [data-job-id], [data-entity-urn], .scaffold-layout__list-item, div[data-chameleon-result-urn]') || el;
 
-    // 2. data-entity-urn o data-chameleon-result-urn (urn:li:jobPosting:123456789)
-    const urnSources = [
-      el.getAttribute?.('data-entity-urn'),
-      el.closest?.('[data-entity-urn]')?.getAttribute('data-entity-urn'),
-      el.querySelector?.('[data-entity-urn]')?.getAttribute('data-entity-urn'),
-      el.getAttribute?.('data-chameleon-result-urn'),
-      el.querySelector?.('[data-chameleon-result-urn]')?.getAttribute('data-chameleon-result-urn')
+    // 1. Atributos directos en el elemento o sus ancestros/descendientes
+    const idAttrs = [
+      'data-job-id',
+      'data-occludable-job-id',
+      'data-job-posting-id',
+      'data-entity-urn',
+      'data-chameleon-result-urn',
+      'data-urn'
     ];
-    for (const u of urnSources) {
-      if (u) {
-        const m = u.match(/jobPosting:(\d+)/);
+
+    for (const attr of idAttrs) {
+      const candidates = [
+        el.getAttribute?.(attr),
+        el.closest?.(`[${attr}]`)?.getAttribute(attr),
+        cardRoot.getAttribute?.(attr),
+        cardRoot.querySelector?.(`[${attr}]`)?.getAttribute(attr)
+      ];
+      for (const val of candidates) {
+        if (!val) continue;
+        const m = String(val).match(/(?:jobPosting(?:%3A|:))?(\d{8,12})/i);
         if (m && m[1]) return m[1];
       }
     }
 
-    // 3. Enlaces href a /jobs/view/XXXX o ?currentJobId=XXXX
-    const links = el.tagName === 'A'
-      ? [el]
-      : Array.from(el.querySelectorAll?.('a[href*="/jobs/view/"], a[href*="currentJobId="]') || []);
+    // 2. Enlaces con /jobs/view/ o currentJobId= dentro de cardRoot
+    const links = Array.from(cardRoot.querySelectorAll?.('a[href*="/jobs/view/"], a[href*="currentJobId="], a[href*="jobPosting"]') || []);
+    if (el.tagName === 'A') links.unshift(el);
     for (const a of links) {
       const href = a.href || a.getAttribute('href') || '';
-      const m = href.match(/\/jobs\/view\/(\d+)/) || href.match(/currentJobId=(\d+)/);
+      const m = href.match(/\/jobs\/view\/(\d{8,12})/i) ||
+                href.match(/currentJobId=(\d{8,12})/i) ||
+                href.match(/jobPosting(?:%3A|:)(\d{8,12})/i);
       if (m && m[1]) return m[1];
     }
 
-    // 4. Búsqueda en el HTML interno por URN numérico
-    if (el.innerHTML) {
-      const m = el.innerHTML.match(/(?:jobPosting|fsd_jobPosting)(?:%3A|:)(\d{8,12})/);
-      if (m && m[1]) return m[1];
-    }
+    // 3. Búsqueda en el HTML de cardRoot por URN o ID numérico
+    const html = cardRoot.innerHTML || el.innerHTML || '';
+    const mHtml = html.match(/(?:jobPosting|fsd_jobPosting|currentJobId)(?:%3A|:|%3D|=)(\d{8,12})/i) ||
+                  html.match(/\/jobs\/view\/(\d{8,12})/i) ||
+                  html.match(/\burn:li:jobPosting:(\d{8,12})\b/i);
+    if (mHtml && mHtml[1]) return mHtml[1];
+
+    // 4. Último recurso: buscar cualquier número de 10 dígitos típico de LinkedIn Jobs (empiezan por 4)
+    const mNum = html.match(/\b(4\d{9})\b/);
+    if (mNum && mNum[1]) return mNum[1];
 
     return null;
+  }
+
+  // ── Extrae el nombre de la empresa de una tarjeta de la lista ──────────────
+  function extractCompanyFromCard(el) {
+    if (!el) return '';
+    const root = el.closest('li, [data-occludable-job-id]') || el;
+    const compEl = root.querySelector(
+      '.job-card-container__primary-description, .job-card-container__company-name, [class*="company"]:not([class*="logo"]), [class*="primary-description"]'
+    );
+    if (compEl) {
+      const t = compEl.textContent.trim();
+      if (t.length >= 2 && !isBadgeText(t)) return t;
+    }
+    const lines = (root.innerText || root.textContent || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 1 && !isBadgeText(l));
+    return lines[1] || '';
+  }
+
+  // ── Extrae la ubicación de una tarjeta de la lista ─────────────────────────
+  function extractLocationFromCard(el) {
+    if (!el) return '';
+    const root = el.closest('li, [data-occludable-job-id]') || el;
+    const locEl = root.querySelector(
+      '.job-card-container__metadata-item, [class*="metadata"]:not([class*="wrapper"]), [class*="location"]'
+    );
+    if (locEl) {
+      const t = locEl.textContent.trim();
+      if (t.length >= 2 && !isBadgeText(t)) return t;
+    }
+    const lines = (root.innerText || root.textContent || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 1 && !isBadgeText(l));
+    return lines[2] || '';
   }
 
   // ── Extrae el título real de la oferta ignorando badges ────────────────────
@@ -850,6 +900,8 @@
 
   // ── Encuentra todas las tarjetas de empleo en el panel IZQUIERDO ──────────
   // Compatible con /jobs/search/, /jobs/search-results/ y cualquier vista de LinkedIn Jobs
+  let cardSessionCounter = 0;
+
   function getLeftPanelJobCards() {
     const rawCandidates = Array.from(document.querySelectorAll(
       'li.jobs-search-results__list-item, ' +
@@ -865,11 +917,15 @@
     ));
 
     const validCards = [];
-    const seenKeys = new Set();
+    const seenJobIds = new Set();
+    const seenElements = new Set();
 
     for (const rawEl of rawCandidates) {
       // Si el candidato es una etiqueta <a> interna, preferir su contenedor más cercano
       const el = (rawEl.tagName === 'A' ? rawEl.closest('li, div[role="button"], .job-card-container, div[data-job-id]') : rawEl) || rawEl;
+
+      // Evitar procesar exactamente el mismo elemento DOM dos veces
+      if (seenElements.has(el)) continue;
 
       // 1. Debe estar en la mitad izquierda de la pantalla
       const rect = el.getBoundingClientRect();
@@ -913,12 +969,39 @@
       // 7. Extraer Job ID numérico
       const jobId = extractJobIdFromElement(el);
 
-      // Deduplicar por Job ID o por título normalizado
-      const normTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 35);
-      const uniqueKey = jobId ? `job_${jobId}` : `title_${normTitle}`;
+      // Si tiene Job ID y ya hemos añadido esta oferta específica, ignorar duplicado de contenedor
+      if (jobId && seenJobIds.has(jobId)) {
+        continue;
+      }
 
-      if (seenKeys.has(uniqueKey)) continue;
-      seenKeys.add(uniqueKey);
+      // Comprobar que no sea un elemento anidado (hijo o padre) de una tarjeta ya aceptada
+      const isNested = validCards.some(c => c.element.contains(el) || el.contains(c.element));
+      if (isNested) {
+        continue;
+      }
+
+      // Registrar elemento y Job ID
+      seenElements.add(el);
+      if (jobId) {
+        seenJobIds.add(jobId);
+      }
+
+      // Clave única infalible:
+      // Si hay jobId -> 'job_' + jobId (persistente entre scrolls)
+      // Si no hay jobId -> combinación única de empresa + ubicación + título + id de sesión en DOM
+      // ¡NUNCA deduplicar por título solo, porque hay decenas de ofertas distintas con el mismo título!
+      let uniqueKey;
+      if (jobId) {
+        uniqueKey = `job_${jobId}`;
+      } else {
+        if (!el.dataset.rfAutopilotKey) {
+          const comp = extractCompanyFromCard(el).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
+          const loc = extractLocationFromCard(el).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20);
+          const tNorm = title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 25);
+          el.dataset.rfAutopilotKey = `card_${comp}_${loc}_${tNorm}_${++cardSessionCounter}`;
+        }
+        uniqueKey = el.dataset.rfAutopilotKey;
+      }
 
       validCards.push({
         element: el,
@@ -1018,8 +1101,8 @@
 
     for (const container of scrollContainers) {
       const prevTop = container.scrollTop;
-      // Scroll moderado (180px) para que las ofertas no se pasen de largo en listas virtuales
-      container.scrollTop += 180;
+      // Scroll suave de 130px (~1 tarjeta) para avanzar exactamente de 1 en 1 sin saltarse nada
+      container.scrollTop += 130;
       if (container.scrollTop !== prevTop) {
         scrolled = true;
       }
@@ -1027,7 +1110,7 @@
       // Disparar eventos de scroll y rueda para activar la virtualización
       container.dispatchEvent(new Event('scroll', { bubbles: true }));
       container.dispatchEvent(new WheelEvent('wheel', {
-        deltaY: 200,
+        deltaY: 130,
         bubbles: true,
         cancelable: true
       }));
