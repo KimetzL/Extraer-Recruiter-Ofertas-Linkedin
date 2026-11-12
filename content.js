@@ -706,9 +706,27 @@
         sendResponse({ success: false, error: 'No hay más páginas disponibles' });
         return false;
       }
+
+      console.log('[RecruiterFinder] Avanzando a la siguiente página de ofertas con botón:', nextBtn);
       nextBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nextBtn.focus?.();
+      nextBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, buttons: 1, view: window }));
+      nextBtn.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, cancelable: true, buttons: 1, view: window }));
       nextBtn.click();
+
+      // Resetear claves para procesar la nueva página limpia desde la 1ª oferta
       autopilotProcessedKeys.clear();
+      document.querySelectorAll('[data-autopilot-processed]').forEach(el => el.removeAttribute('data-autopilot-processed'));
+      document.querySelectorAll('[data-rf-autopilot-key]').forEach(el => el.removeAttribute('data-rf-autopilot-key'));
+
+      // Volver arriba suavemente en los contenedores de scroll tras cargar
+      setTimeout(() => {
+        const scrollContainers = findActualScrollContainers();
+        for (const sc of scrollContainers) {
+          if (sc.scrollTop > 0) sc.scrollTop = 0;
+        }
+      }, 600);
+
       sendResponse({ success: true });
       return false;
     }
@@ -1172,17 +1190,66 @@
   }
 
   function findNextPageButton() {
-    // Botón de página siguiente (flecha o texto Siguiente/Next)
-    const candidates = [
+    // 1. Selector directo data-testid de LinkedIn Jobs (el más preciso y actual)
+    const testIdBtn = document.querySelector('button[data-testid="pagination-controls-next-button-visible"], button[data-testid*="next-button"]:not([data-testid*="hidden"])');
+    if (testIdBtn && !testIdBtn.disabled) {
+      return testIdBtn;
+    }
+
+    // 2. Por el icono chevron-right de paginación (#chevron-right-outline-small)
+    const svgChevron = document.querySelector('#chevron-right-outline-small, svg[id*="chevron-right"]');
+    if (svgChevron) {
+      const btn = svgChevron.closest('button');
+      if (btn && !btn.disabled && !btn.getAttribute('data-testid')?.includes('hidden')) {
+        return btn;
+      }
+    }
+
+    // 3. Por texto "Siguiente" o "Next" dentro de la barra de paginación
+    const allButtons = document.querySelectorAll('button');
+    for (const b of allButtons) {
+      if (b.disabled || b.getAttribute('data-testid')?.includes('hidden')) continue;
+      const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+      if (txt === 'siguiente' || txt === 'next' || txt.includes('siguiente') || txt.includes('next')) {
+        // Verificar que está en un contexto de paginación o navegación inferior
+        if (b.closest('[data-testid*="pagination"], [class*="pagination"], nav') || b.querySelector('svg, [id*="chevron"]')) {
+          return b;
+        }
+      }
+    }
+
+    // 4. Selectores clásicos de LinkedIn
+    const classicCandidates = [
       document.querySelector('button[aria-label="Siguiente"]'),
       document.querySelector('button[aria-label="Next"]'),
+      document.querySelector('button[aria-label*="Siguiente" i]'),
+      document.querySelector('button[aria-label*="Next" i]'),
       document.querySelector('.jobs-search-pagination__button--next'),
       document.querySelector('button.artdeco-pagination__button--next')
     ];
 
-    for (const b of candidates) {
+    for (const b of classicCandidates) {
       if (b && !b.disabled && !b.classList.contains('artdeco-button--disabled')) {
         return b;
+      }
+    }
+
+    // 5. Fallback por número: buscar el botón de la página siguiente en la lista de páginas
+    const activePage = document.querySelector('[data-testid*="pagination"] [aria-current="true"], [data-testid*="pagination"] .selected');
+    if (activePage) {
+      const currentNum = parseInt(activePage.textContent.trim(), 10);
+      if (currentNum && !isNaN(currentNum)) {
+        const nextNum = currentNum + 1;
+        const nextNumBtn = document.querySelector(`[data-testid*="pagination"] button[aria-label*="${nextNum}"], [data-testid*="pagination"] button[data-test-pagination-page-btn="${nextNum}"]`);
+        if (nextNumBtn && !nextNumBtn.disabled) return nextNumBtn;
+
+        // Buscar botón cuyo texto sea el número siguiente
+        const pageButtons = document.querySelectorAll('[data-testid*="pagination"] button');
+        for (const pb of pageButtons) {
+          if (pb.textContent.trim() === String(nextNum)) {
+            return pb;
+          }
+        }
       }
     }
 

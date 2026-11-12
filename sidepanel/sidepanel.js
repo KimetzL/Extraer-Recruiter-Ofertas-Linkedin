@@ -588,18 +588,17 @@
       // El content script hizo scroll para revelar más items (lista virtual)
       if (response.success && response.scrolled) {
         autopilotScrollCount++;
-        if (autopilotScrollCount >= MAX_SCROLL_ATTEMPTS) {
-          // Demasiados scrolls sin nuevo item → intentar paginación
+        // Si el contenedor ya no puede hacer más scroll físico (llegó al fondo) o ya scrolleó varias veces
+        if (response.didScroll === false || autopilotScrollCount >= 4) {
           autopilotScrollCount = 0;
           tryNextPage();
           return;
         }
-        autopilotStatusText.textContent = `Cargando más ofertas... (scroll ${autopilotScrollCount}/${MAX_SCROLL_ATTEMPTS})`;
-        // Esperar a que el DOM se actualice tras el scroll (1600ms para renderizado virtual)
-        autopilotTimer = setTimeout(runAutopilotStep, 1600);
+        autopilotStatusText.textContent = `Cargando más ofertas... (scroll ${autopilotScrollCount}/4)`;
+        // Esperar a que el DOM se actualice tras el scroll (1300ms para renderizado virtual)
+        autopilotTimer = setTimeout(runAutopilotStep, 1300);
         return;
       }
-
       // Fin de página detectado en el content script
       if (!response.success && response.reason === 'page_done') {
         autopilotScrollCount = 0;
